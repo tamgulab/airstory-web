@@ -37,6 +37,30 @@ const getStatusLabel = (value, metric = 'pm25') => {
 // Stable references — new [] / {} each render makes LoadScript reload the Maps API (flicker / “bouncing”).
 const GOOGLE_MAP_LIBRARIES = Object.freeze(['visualization']);
 const MAP_CONTAINER_STYLE = Object.freeze({ width: '100%', height: '100%' });
+/** Pin before 3.65 — Google removed HeatmapLayer in newer weekly builds (May 2026). */
+const GOOGLE_MAPS_API_VERSION = '3.64';
+const GOOGLE_MAPS_SCRIPT_ID = 'airstory-phg-google-maps';
+
+/** Prevent a HeatmapLayer throw from unmounting the whole app (white screen). */
+class HeatmapLayerBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.warn('[HeatMap] HeatmapLayer unavailable:', error?.message ?? error);
+  }
+
+  render() {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
+}
 
 // Silver/desaturated map styling
 const mapStyles = [
@@ -823,7 +847,9 @@ const HeatMapDashboard = ({
           <div className="relative rounded-xl overflow-hidden border-2 border-gray-200 flex-1" style={{ minHeight: '600px' }}>
             {googleMapsApiKey ? (
               <LoadScript
+                id={GOOGLE_MAPS_SCRIPT_ID}
                 googleMapsApiKey={googleMapsApiKey}
+                version={GOOGLE_MAPS_API_VERSION}
                 libraries={GOOGLE_MAP_LIBRARIES}
                 onLoad={() => setMapsLoadError('')}
                 onError={() => {
@@ -846,10 +872,12 @@ const HeatMapDashboard = ({
                   onUnmount={onMapUnmount}
                 >
                   {isLoaded && heatmapData.length > 0 && (
-                    <HeatmapLayer
-                      data={heatmapData}
-                      options={heatmapOptions}
-                    />
+                    <HeatmapLayerBoundary>
+                      <HeatmapLayer
+                        data={heatmapData}
+                        options={heatmapOptions}
+                      />
+                    </HeatmapLayerBoundary>
                   )}
                   {isLoaded && (
                     <>

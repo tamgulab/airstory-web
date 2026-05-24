@@ -609,16 +609,20 @@ export default function App() {
               aria-label="Go to Heat Map"
             >
               <img 
-                src="/logo.svg" 
+                src={`${process.env.PUBLIC_URL}/logo.svg`}
                 alt="Air Story" 
                 className="h-12 w-auto"
                 onError={(e) => {
-                  // Fallback to text if image fails to load
                   e.target.style.display = 'none';
-                  e.target.nextSibling.style.display = 'block';
+                  const fallback = e.target.parentElement?.querySelector('[data-logo-fallback]');
+                  if (fallback) fallback.style.display = 'block';
                 }}
               />
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight" style={{display: 'none'}}>
+              <h1
+                data-logo-fallback
+                className="text-2xl font-bold text-gray-900 tracking-tight"
+                style={{ display: 'none' }}
+              >
                 Air Story
               </h1>
             </button>

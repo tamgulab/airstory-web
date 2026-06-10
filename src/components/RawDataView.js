@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2, Lock } from 'lucide-react';
+import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements } from '../api/data';
 import {
   clearImportedMeasurements,
@@ -16,7 +16,6 @@ import ConfirmDialog from './ConfirmDialog';
 import {
   SENSOR_CSV_EXPORT_HEADERS,
   csvEscapeCell,
-  formatSensorTimestamp,
 } from '../constants/sensorCsv';
 // DEV ONLY - MOCK DATA - REMOVE BEFORE DEPLOY
 import {
@@ -39,6 +38,11 @@ const ALL_METRICS_ON = { pm25: true, co: true, temp: true, humidity: true };
 
 // A "class" is a (teacher · period) pair → this key never lets period stand alone.
 const ck = (instructor, period) => `${instructor}|${period}`;
+
+// TODO(backend): the backend stores temperature in CELSIUS only. The °C/°F choice is a
+// client-side display preference — convert at render, never change stored data.
+const cToF = (c) => Math.round((Number(c) * 9) / 5 + 32);
+const fToC = (f) => Math.round(((Number(f) - 32) * 5) / 9);
 
 // Read-only visibility pills (Section 4). Visibility is set on the phone before upload.
 // TODO(backend): replace mock `visibility` with the real `visibility` field once
@@ -130,6 +134,29 @@ const RawDataView = ({
   const [visibilityMenu, setVisibilityMenu] = useState(null); // rowId whose visibility menu is open
   // Empty-by-default: no sessions shown until the student engages (picks a scope tab/selector or applies filters).
   const [hasEngaged, setHasEngaged] = useState(false);
+
+  // Display preferences — view-only, this session (in-memory). Data underneath is unchanged.
+  // TODO(persist): a saved user preference would attach to the user profile (or localStorage);
+  // initialize these from there instead of constants once that exists.
+  const [tempUnit, setTempUnit] = useState('C'); // 'C' | 'F' — display only; data stays Celsius
+  const [dateFormat, setDateFormat] = useState('ymd'); // 'ymd' | 'mdy'
+  const [showDisplaySettings, setShowDisplaySettings] = useState(false);
+
+  // Render-time converters that follow the display preferences.
+  const tempUnitLabel = tempUnit === 'F' ? '°F' : '°C';
+  const displayTemp = (c) => (tempUnit === 'F' ? cToF(c) : Math.round(Number(c)));
+  const tempInputToC = (v) => (tempUnit === 'F' ? fToC(v) : v);
+  const formatTimestamp = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    const y = d.getFullYear();
+    const mo = p(d.getMonth() + 1);
+    const da = p(d.getDate());
+    const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    return `${dateFormat === 'mdy' ? `${mo}-${da}-${y}` : `${y}-${mo}-${da}`} ${time}`;
+  };
 
   const [currentPage, setCurrentPage] = useState(1);
   const [editingNotes, setEditingNotes] = useState(null);
@@ -663,6 +690,53 @@ const RawDataView = ({
             >
               ?
             </button>
+
+            {/* Display preferences (view-only, not data filters) */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDisplaySettings((s) => !s)}
+                className={`flex items-center justify-center w-6 h-6 rounded-full border transition-colors ${
+                  showDisplaySettings ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                }`}
+                title="Display preferences"
+                aria-label="Display preferences"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+              </button>
+              {showDisplaySettings && (
+                <div className="absolute left-0 z-30 mt-2 w-60 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-left">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Display preferences</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-700">Temperature</span>
+                    <div className="inline-flex rounded-md border border-gray-200 p-0.5">
+                      {['C', 'F'].map((u) => (
+                        <button
+                          key={u}
+                          onClick={() => setTempUnit(u)}
+                          className={`px-2 py-0.5 text-xs rounded ${tempUnit === u ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                        >
+                          °{u}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-700">Date format</span>
+                    <div className="inline-flex rounded-md border border-gray-200 p-0.5">
+                      {[{ k: 'ymd', l: 'yyyy-mm-dd' }, { k: 'mdy', l: 'mm-dd-yyyy' }].map((o) => (
+                        <button
+                          key={o.k}
+                          onClick={() => setDateFormat(o.k)}
+                          className={`px-2 py-0.5 text-xs rounded ${dateFormat === o.k ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                        >
+                          {o.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <p className="text-gray-600">
             Explore air quality data from your group, class, and school
@@ -999,7 +1073,7 @@ const RawDataView = ({
                   title="Temperature"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="leading-tight">TEMP (°C)</span>
+                    <span className="leading-tight">TEMP ({tempUnitLabel})</span>
                     <SortIcon columnKey="temp" />
                   </div>
                 </th>
@@ -1033,20 +1107,20 @@ const RawDataView = ({
                 <th
                   onClick={() => handleSort('latitude')}
                   className="w-px whitespace-nowrap px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                  title="Latitude"
+                  title="GPS Latitude"
                 >
                   <div className="flex items-center gap-2">
-                    LAT
+                    GPS LAT
                     <SortIcon columnKey="latitude" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('longitude')}
                   className="w-px whitespace-nowrap px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                  title="Longitude"
+                  title="GPS Longitude"
                 >
                   <div className="flex items-center gap-2">
-                    LONG
+                    GPS LONG
                     <SortIcon columnKey="longitude" />
                   </div>
                 </th>
@@ -1117,7 +1191,7 @@ const RawDataView = ({
                         </button>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap font-mono text-xs">
-                        {formatSensorTimestamp(row.capturedAt)}
+                        {formatTimestamp(row.capturedAt)}
                       </td>
                   {/* PM 2.5 */}
                   <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.pm25 ? '' : 'hidden'} ${selectedMetric === 'pm25' ? 'bg-blue-50' : ''}`}>
@@ -1183,11 +1257,11 @@ const RawDataView = ({
                     {editingCell.rowId === row.id && editingCell.field === 'temp' ? (
                       <input
                         type="number"
-                        defaultValue={row.temp}
+                        defaultValue={displayTemp(row.temp)}
                         autoFocus
-                        onBlur={(e) => handleFieldEdit(row.id, 'temp', e.target.value)}
+                        onBlur={(e) => handleFieldEdit(row.id, 'temp', tempInputToC(e.target.value))}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleFieldEdit(row.id, 'temp', e.target.value);
+                          if (e.key === 'Enter') handleFieldEdit(row.id, 'temp', tempInputToC(e.target.value));
                           if (e.key === 'Escape') setEditingCell({ rowId: null, field: null });
                         }}
                         className="w-20 px-2 py-1 text-sm border border-red-500 rounded focus:outline-none focus:ring-2 focus:ring-red-500"
@@ -1198,7 +1272,7 @@ const RawDataView = ({
                         className="flex items-center gap-1 text-left w-full"
                         title="Click to edit temperature"
                       >
-                        <span>{row.temp}</span>
+                        <span>{displayTemp(row.temp)}</span>
                         {isEdited(row.id, 'temp') && (
                           <span className="text-xs text-orange-600 font-semibold">*</span>
                         )}
@@ -1391,7 +1465,7 @@ const RawDataView = ({
                                 <th className="px-2 py-2 text-left font-semibold">Time</th>
                                 <th className="px-2 py-2 text-left font-semibold">PM 2.5 (µg/m³)</th>
                                 <th className="px-2 py-2 text-left font-semibold">CO (ppm)</th>
-                                <th className="px-2 py-2 text-left font-semibold">Temperature (°C)</th>
+                                <th className="px-2 py-2 text-left font-semibold">Temperature ({tempUnitLabel})</th>
                                 <th className="px-2 py-2 text-left font-semibold">Humidity (%)</th>
                               </tr>
                             </thead>
@@ -1401,7 +1475,7 @@ const RawDataView = ({
                                   <td className="px-2 py-1 font-mono">{detail.time}</td>
                                   <td className="px-2 py-1">{detail.pm25}</td>
                                   <td className="px-2 py-1">{detail.co}</td>
-                                  <td className="px-2 py-1">{detail.temp}</td>
+                                  <td className="px-2 py-1">{displayTemp(detail.temp)}</td>
                                   <td className="px-2 py-1">{detail.humidity}</td>
                 </tr>
               ))}

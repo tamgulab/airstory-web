@@ -1,5 +1,5 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, Info, ChevronRight, Image as ImageIcon, X, Upload, Share2 } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2 } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements } from '../api/data';
 import {
   clearImportedMeasurements,
@@ -12,6 +12,7 @@ import {
 } from '../utils/importedData';
 import { workspaceMeasurementsToDisplayRows } from '../utils/measurementRows';
 import DataCalendar from './DataCalendar';
+import ConfirmDialog from './ConfirmDialog';
 import {
   SENSOR_CSV_EXPORT_HEADERS,
   csvEscapeCell,
@@ -35,6 +36,9 @@ const METRIC_KEYS = [
   { key: 'temp', label: 'Temperature' },
 ];
 const ALL_METRICS_ON = { pm25: true, co: true, temp: true, humidity: true };
+
+// A "class" is a (teacher · period) pair → this key never lets period stand alone.
+const ck = (instructor, period) => `${instructor}|${period}`;
 
 // Read-only visibility pills (Section 4). Visibility is set on the phone before upload.
 // TODO(backend): replace mock `visibility` with the real `visibility` field once
@@ -80,21 +84,21 @@ const RawDataView = ({
 
   // --- Redesign: viewer identity + scope (Group / Class / School) ---
   // DEV ONLY - MOCK DATA: identity comes from the mock student until real auth carries it.
-  const viewerIdentity = MOCK_DATA_ENABLED
-    ? MOCK_IDENTITY
-    : {
-        school: viewerProfile?.school || '',
-        studentCode: viewerProfile?.studentId || '',
-        memberships: [
-          {
-            instructor: viewerProfile?.instructor || '',
-            period: viewerProfile?.period || '',
-            group: viewerProfile?.group || '',
-          },
-        ],
-      };
-  // A "class" is a (teacher, period) pair → this key never lets period stand alone.
-  const ck = (instructor, period) => `${instructor}|${period}`;
+  const viewerIdentity = useMemo(() => (
+    MOCK_DATA_ENABLED
+      ? MOCK_IDENTITY
+      : {
+          school: viewerProfile?.school || '',
+          studentCode: viewerProfile?.studentId || '',
+          memberships: [
+            {
+              instructor: viewerProfile?.instructor || '',
+              period: viewerProfile?.period || '',
+              group: viewerProfile?.group || '',
+            },
+          ],
+        }
+  ), [viewerProfile]);
   const primaryMembership = viewerIdentity.memberships[0] || { instructor: '', period: '', group: '' };
   const viewerClassKeys = viewerIdentity.memberships.map((m) => ck(m.instructor, m.period));
 
@@ -120,6 +124,8 @@ const RawDataView = ({
   const [appliedMetrics, setAppliedMetrics] = useState(ALL_METRICS_ON);
   const [openChip, setOpenChip] = useState(null); // 'date' | 'metrics' | 'location' | null
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // Shared confirmation for any destructive action: { variant, title, message, confirmLabel, onConfirm } | null
+  const [confirmState, setConfirmState] = useState(null);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [editingNotes, setEditingNotes] = useState(null);
@@ -164,10 +170,30 @@ const RawDataView = ({
     setSelectedGroup(filters.group || '');
   }, [filters.school, filters.instructor, filters.period, filters.group]);
 
-  // Locations available for the Location chip — limited to the current scope + visibility.
-  const locations = [...new Set(
-    rawData.filter((r) => rowInScope(r) && rowVisible(r)).map((d) => d.location)
-  )];
+  // Locations for the Location chip — only sessions visible in the current scope,
+  // further narrowed by the DRAFT date selection (chips narrow each other live, before Apply).
+  // Metrics are column toggles, not row filters, so they don't change available locations.
+  const locations = useMemo(() => {
+    const inScope = (r) =>
+      scopeTab === 'school'
+        ? r.school === viewerIdentity.school
+        : scopeTab === 'class'
+          ? ck(r.instructor, r.period) === scopeClassKey
+          : ck(r.instructor, r.period) === scopeClassKey && r.group === scopeGroup;
+    return [...new Set(
+      rawData
+        .filter((r) => inScope(r) && isRowVisibleToViewer(r, viewerIdentity))
+        .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
+        .map((d) => d.location)
+    )];
+  }, [rawData, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity]);
+
+  // If the drafted location is no longer available (scope or date draft changed), deselect it.
+  useEffect(() => {
+    if (locationFilter !== 'all' && !locations.includes(locationFilter)) {
+      setLocationFilter('all');
+    }
+  }, [locations, locationFilter]);
 
   // Dates that have data → drives the calendar's bold/selectable days (Section 3).
   const dataDates = new Set(rawData.map((d) => d.date));
@@ -600,7 +626,17 @@ const RawDataView = ({
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Raw Data</h1>
+          <div className="flex items-center gap-2 mb-2">
+            <h1 className="text-3xl font-bold text-gray-900">Raw Data</h1>
+            <button
+              onClick={() => setShowHelpModal(true)}
+              className="flex items-center justify-center w-6 h-6 rounded-full border border-gray-300 text-gray-500 text-sm font-bold leading-none hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              title="How to use Raw Data"
+              aria-label="How to use Raw Data"
+            >
+              ?
+            </button>
+          </div>
           <p className="text-gray-600">
             Explore air quality data from your group, class, and school
           </p>
@@ -626,17 +662,16 @@ const RawDataView = ({
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
           </label>
           <button
-            onClick={handleClearImportedData}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all"
+            onClick={() => setConfirmState({
+              variant: 'danger',
+              title: 'Clear all imported data?',
+              message: 'This removes all imported data from this view.',
+              confirmLabel: 'Clear data',
+              onConfirm: handleClearImportedData,
+            })}
+            className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-all"
           >
             Clear Data
-          </button>
-          <button
-            onClick={() => setShowHelpModal(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-          >
-            <Info className="w-4 h-4" />
-            How to Use Raw Data
           </button>
           <div className="relative">
             <button
@@ -1542,6 +1577,18 @@ const RawDataView = ({
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={!!confirmState}
+        variant={confirmState?.variant}
+        title={confirmState?.title}
+        message={confirmState?.message}
+        confirmLabel={confirmState?.confirmLabel}
+        onCancel={() => setConfirmState(null)}
+        onConfirm={() => {
+          confirmState?.onConfirm?.();
+          setConfirmState(null);
+        }}
+      />
     </div>
   );
 };

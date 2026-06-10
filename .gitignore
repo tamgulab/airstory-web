@@ -44,3 +44,5 @@ backend/.env
 # Historical keepsake folders
 keepsake-pre-backend/**/node_modules/
 
+# Vercel
+.vercel/

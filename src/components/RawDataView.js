@@ -940,10 +940,10 @@ const RawDataView = ({
                   className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.pm25 ? '' : 'hidden'} ${
                     selectedMetric === 'pm25' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
-                  title="Particulate matter 2.5 (µg/m³)"
+                  title="Particulate matter 2.5"
                 >
                   <div className="flex items-center gap-2">
-                    PM 2.5
+                    PM 2.5 <span className="normal-case">(µg/m³)</span>
                     <SortIcon columnKey="pm25" />
                   </div>
                 </th>
@@ -955,10 +955,10 @@ const RawDataView = ({
                   className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.co ? '' : 'hidden'} ${
                     selectedMetric === 'co' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
-                  title="Carbon monoxide (ppm)"
+                  title="Carbon monoxide"
                 >
                   <div className="flex items-center gap-2">
-                    CO
+                    CO <span className="normal-case">(ppm)</span>
                     <SortIcon columnKey="co" />
                   </div>
                 </th>
@@ -1357,10 +1357,10 @@ const RawDataView = ({
                             <thead className="bg-gray-100 sticky top-0">
                               <tr>
                                 <th className="px-2 py-2 text-left font-semibold">Time</th>
-                                <th className="px-2 py-2 text-left font-semibold">PM 2.5</th>
-                                <th className="px-2 py-2 text-left font-semibold">CO</th>
+                                <th className="px-2 py-2 text-left font-semibold">PM 2.5 (µg/m³)</th>
+                                <th className="px-2 py-2 text-left font-semibold">CO (ppm)</th>
                                 <th className="px-2 py-2 text-left font-semibold">Temperature (°C)</th>
-                                <th className="px-2 py-2 text-left font-semibold">Humidity</th>
+                                <th className="px-2 py-2 text-left font-semibold">Humidity (%)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-200">

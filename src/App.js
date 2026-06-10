@@ -75,16 +75,37 @@ const METRIC_THEMES = {
   }
 };
 
+// DEV ONLY - REMOVE BEFORE DEPLOY
+// Flip DEV_SKIP_LOGIN to false (or delete this block) to restore the normal login flow.
+// When true, the app skips LandingPage and opens directly on Raw Data as a fake signed-in user.
+const DEV_SKIP_LOGIN = true;
+const DEV_FAKE_USER = {
+  accessToken: "dev-fake-token",
+  user: {
+    workspaceId: "dev-workspace",
+    fullName: "Dev Tester",
+  },
+};
+
 export default function App() {
   const storedAuth = getStoredAuth();
-  const [isLoggedIn, setIsLoggedIn] = useState(Boolean(storedAuth?.accessToken));
-  const [activeSection, setActiveSection] = useState("heatmap");
+  // DEV ONLY - REMOVE BEFORE DEPLOY: start logged-in on Raw Data when the dev flag is on.
+  const [isLoggedIn, setIsLoggedIn] = useState(
+    DEV_SKIP_LOGIN ? true : Boolean(storedAuth?.accessToken)
+  );
+  const [activeSection, setActiveSection] = useState(
+    DEV_SKIP_LOGIN ? "rawdata" : "heatmap"
+  );
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
-  const [workspaceId, setWorkspaceId] = useState(storedAuth?.user?.workspaceId || "");
+  // DEV ONLY - REMOVE BEFORE DEPLOY: seed workspace from the fake dev user when the flag is on.
+  const [workspaceId, setWorkspaceId] = useState(
+    DEV_SKIP_LOGIN ? DEV_FAKE_USER.user.workspaceId : (storedAuth?.user?.workspaceId || "")
+  );
   const [userRole, setUserRole] = useState("student");
   const [viewerProfile, setViewerProfile] = useState({
-    displayName: storedAuth?.user?.fullName || "",
+    // DEV ONLY - REMOVE BEFORE DEPLOY: show the fake dev user's name when the flag is on.
+    displayName: DEV_SKIP_LOGIN ? DEV_FAKE_USER.user.fullName : (storedAuth?.user?.fullName || ""),
     school: "",
     instructor: "",
     period: "",

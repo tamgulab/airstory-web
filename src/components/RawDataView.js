@@ -1,7 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, Info, ChevronRight, Image as ImageIcon, X, Upload } from 'lucide-react';
+import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, Info, ChevronRight, Image as ImageIcon, X, Upload, Share2 } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements } from '../api/data';
-import { getRoster, getClassStructure } from '../api/auth';
 import {
   clearImportedMeasurements,
   getImportedMeasurements,
@@ -9,22 +8,43 @@ import {
   parseImportedCsvRaw,
   setImportedMeasurements,
   normalizeIndoorOutdoor,
-  isBlankHierarchyField,
   uniqueHierarchyFromImportedRows,
 } from '../utils/importedData';
-import {
-  compareHierarchyToken,
-  groupsForPeriodFromStructure,
-  periodsFromClassStructure,
-} from '../utils/classStructure';
 import { workspaceMeasurementsToDisplayRows } from '../utils/measurementRows';
+import DataCalendar from './DataCalendar';
 import {
   SENSOR_CSV_EXPORT_HEADERS,
   csvEscapeCell,
   formatSensorTimestamp,
 } from '../constants/sensorCsv';
+// DEV ONLY - MOCK DATA - REMOVE BEFORE DEPLOY
+import {
+  MOCK_DATA_ENABLED,
+  MOCK_IDENTITY,
+  MOCK_MEASUREMENTS,
+  isRowVisibleToViewer,
+} from '../constants/mockMeasurements';
 
 const CSV_UPLOAD_CHUNK_SIZE = 2500;
+
+// Toolbar config (Section 2)
+const METRIC_KEYS = [
+  { key: 'pm25', label: 'PM2.5' },
+  { key: 'co', label: 'CO' },
+  { key: 'humidity', label: 'Humidity' },
+  { key: 'temp', label: 'Temperature' },
+];
+const ALL_METRICS_ON = { pm25: true, co: true, temp: true, humidity: true };
+
+// Read-only visibility pills (Section 4). Visibility is set on the phone before upload.
+// TODO(backend): replace mock `visibility` with the real `visibility` field once
+// GET /workspaces/:id/measurements returns it (see mockMeasurements.js).
+const VISIBILITY_META = {
+  public: { label: 'Public', cls: 'bg-green-100 text-green-800' },
+  school: { label: 'School only', cls: 'bg-blue-100 text-blue-800' },
+  class: { label: 'Class only', cls: 'bg-purple-100 text-purple-800' },
+  me: { label: 'Me only', cls: 'bg-gray-200 text-gray-700' },
+};
 
 const INDOOR_OUTDOOR_OPTIONS = ['INDOOR', 'OUTDOOR'];
 
@@ -38,22 +58,68 @@ const RawDataView = ({
   theme,
   metricThemes,
   onImportedDataChanged,
-  classStructure,
 }) => {
-  const [rawData, setRawData] = useState(getImportedMeasurements());
+  const [rawData, setRawData] = useState(() => {
+    const imported = getImportedMeasurements();
+    // DEV ONLY - MOCK DATA: seed the redesign with stub rows when nothing is imported.
+    if (MOCK_DATA_ENABLED && imported.length === 0) return MOCK_MEASUREMENTS;
+    return imported;
+  });
   const [loadingBackend, setLoadingBackend] = useState(false);
   const [importError, setImportError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
-  const [dateFilter, setDateFilter] = useState('all');
+  const [selectedDatesDraft, setSelectedDatesDraft] = useState(() => new Set());
   const [locationFilter, setLocationFilter] = useState('all');
-  const [sessionFilter, setSessionFilter] = useState('all');
-  
-  // Hierarchy Filters
+
+  // Hierarchy Filters (kept only for CSV export filename + filters sync)
   const [selectedSchool, setSelectedSchool] = useState(filters.school || '');
   const [selectedInstructor, setSelectedInstructor] = useState(filters.instructor || '');
   const [selectedPeriod, setSelectedPeriod] = useState(filters.period || '');
   const [selectedGroup, setSelectedGroup] = useState(filters.group || '');
+
+  // --- Redesign: viewer identity + scope (Group / Class / School) ---
+  // DEV ONLY - MOCK DATA: identity comes from the mock student until real auth carries it.
+  const viewerIdentity = MOCK_DATA_ENABLED
+    ? MOCK_IDENTITY
+    : {
+        school: viewerProfile?.school || '',
+        studentCode: viewerProfile?.studentId || '',
+        memberships: [
+          {
+            instructor: viewerProfile?.instructor || '',
+            period: viewerProfile?.period || '',
+            group: viewerProfile?.group || '',
+          },
+        ],
+      };
+  // A "class" is a (teacher, period) pair → this key never lets period stand alone.
+  const ck = (instructor, period) => `${instructor}|${period}`;
+  const primaryMembership = viewerIdentity.memberships[0] || { instructor: '', period: '', group: '' };
+  const viewerClassKeys = viewerIdentity.memberships.map((m) => ck(m.instructor, m.period));
+
+  const [scopeTab, setScopeTab] = useState('group'); // 'group' | 'class' | 'school' (Group is the landing default)
+  const [scopeClassKey, setScopeClassKey] = useState(ck(primaryMembership.instructor, primaryMembership.period));
+  const [scopeGroup, setScopeGroup] = useState(primaryMembership.group);
+
+  // Shared scope + visibility predicates (used by the table AND the scope-aware Location options).
+  const rowVisible = (row) => isRowVisibleToViewer(row, viewerIdentity);
+  const rowInScope = (row) =>
+    scopeTab === 'school'
+      ? row.school === viewerIdentity.school
+      : scopeTab === 'class'
+        ? ck(row.instructor, row.period) === scopeClassKey
+        : ck(row.instructor, row.period) === scopeClassKey && row.group === scopeGroup;
+
+  // Toolbar: draft values (bound to inputs) vs applied values (used by the table).
+  // Search/date/location/metrics only take effect on [Apply]. Scope tabs are immediate.
+  const [metricsDraft, setMetricsDraft] = useState(ALL_METRICS_ON);
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [appliedDates, setAppliedDates] = useState(() => new Set());
+  const [appliedLocation, setAppliedLocation] = useState('all');
+  const [appliedMetrics, setAppliedMetrics] = useState(ALL_METRICS_ON);
+  const [openChip, setOpenChip] = useState(null); // 'date' | 'metrics' | 'location' | null
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [editingNotes, setEditingNotes] = useState(null);
@@ -62,35 +128,8 @@ const RawDataView = ({
   const [expandedRows, setExpandedRows] = useState({});
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
-  const [rosterRows, setRosterRows] = useState([]);
-  /** When App has not loaded workspace grid yet (or /class-structure failed once), fetch here so period/group match Manage Classes. */
-  const [fetchedClassStructure, setFetchedClassStructure] = useState(null);
   const itemsPerPage = 50;
   const importGenerationRef = useRef(0);
-
-  const resolvedClassStructure = classStructure || fetchedClassStructure;
-
-  useEffect(() => {
-    if (!workspaceId) {
-      setFetchedClassStructure(null);
-      return;
-    }
-    if (classStructure) {
-      setFetchedClassStructure(null);
-      return;
-    }
-    let cancelled = false;
-    getClassStructure(workspaceId)
-      .then((s) => {
-        if (!cancelled) setFetchedClassStructure(s);
-      })
-      .catch(() => {
-        if (!cancelled) setFetchedClassStructure(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, classStructure]);
 
   const loadFromBackend = useCallback(async () => {
     if (!workspaceId) return;
@@ -119,150 +158,81 @@ const RawDataView = ({
   }, [loadFromBackend]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    async function loadRosterMeta() {
-      if (!workspaceId) return;
-      try {
-        const data = await getRoster(workspaceId);
-        if (!cancelled) setRosterRows(data.members || []);
-      } catch {
-        if (!cancelled) setRosterRows([]);
-      }
-    }
-    loadRosterMeta();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  React.useEffect(() => {
     setSelectedSchool(filters.school || '');
     setSelectedInstructor(filters.instructor || '');
     setSelectedPeriod(filters.period || '');
     setSelectedGroup(filters.group || '');
   }, [filters.school, filters.instructor, filters.period, filters.group]);
 
-  // Get unique locations, sessions, groups, and schools
-  const locations = [...new Set(rawData.map(d => d.location))];
-  const sessions = [...new Set(rawData.map(d => d.sessionId))].map(id => {
-    const session = rawData.find(d => d.sessionId === id);
-    return { id, name: session.sessionName };
+  // Locations available for the Location chip — limited to the current scope + visibility.
+  const locations = [...new Set(
+    rawData.filter((r) => rowInScope(r) && rowVisible(r)).map((d) => d.location)
+  )];
+
+  // Dates that have data → drives the calendar's bold/selectable days (Section 3).
+  const dataDates = new Set(rawData.map((d) => d.date));
+
+  // Class-periods (teacher · period) present in the school → drives the Class tab.
+  const schoolRows = rawData.filter((r) => r.school === viewerIdentity.school);
+  const classPeriods = [];
+  const seenClass = new Set();
+  schoolRows.forEach((r) => {
+    const key = ck(r.instructor, r.period);
+    if (r.instructor && r.period && !seenClass.has(key)) {
+      seenClass.add(key);
+      classPeriods.push({ key, label: `${r.instructor} · ${r.period}` });
+    }
   });
+  classPeriods.sort((a, b) => a.label.localeCompare(b.label));
+
+  // Groups within the currently selected class context → drives the Group tab.
+  const groupsForSelectedClass = [...new Set(
+    schoolRows.filter((r) => ck(r.instructor, r.period) === scopeClassKey).map((r) => r.group).filter(Boolean)
+  )].sort();
+
+  // The viewer's own group within a given class-period (empty if not a member).
+  const viewerGroupForClass = (key) => {
+    const m = viewerIdentity.memberships.find((mm) => ck(mm.instructor, mm.period) === key);
+    return m ? m.group : '';
+  };
+  const selectedClassLabel = classPeriods.find((c) => c.key === scopeClassKey)?.label || '';
+
+  // Switching class context resets the Group default to follow it.
+  const selectClassContext = (key) => {
+    setScopeClassKey(key);
+    const ownGroup = viewerGroupForClass(key);
+    const groups = [...new Set(
+      schoolRows.filter((r) => ck(r.instructor, r.period) === key).map((r) => r.group).filter(Boolean)
+    )].sort();
+    setScopeGroup(ownGroup || groups[0] || '');
+  };
   
-  const rosterSchools = rosterRows.map((m) => m.school_code).filter(Boolean);
-  const rosterInstructors = rosterRows.map((m) => m.instructor).filter(Boolean);
-  const rosterPeriods = rosterRows.map((m) => m.period).filter(Boolean);
-  const rosterGroups = rosterRows.map((m) => m.group_code).filter(Boolean);
-
-  const allSchools = [...new Set((rosterSchools.length ? rosterSchools : rawData.map((d) => d.school)).filter(Boolean))].sort();
-  const allInstructors = [...new Set(
-    (rosterInstructors.length ? rosterRows.filter((m) => !selectedSchool || m.school_code === selectedSchool).map((m) => m.instructor) : rawData
-      .filter((d) => !selectedSchool || d.school === selectedSchool)
-      .map((d) => d.instructor))
-      .filter(Boolean)
-  )].sort();
-  const allPeriods = [...new Set(
-    (rosterPeriods.length
-      ? rosterRows
-          .filter((m) => (!selectedSchool || m.school_code === selectedSchool) && (!selectedInstructor || m.instructor === selectedInstructor))
-          .map((m) => m.period)
-      : rawData
-          .filter((d) => (!selectedSchool || d.school === selectedSchool) && (!selectedInstructor || d.instructor === selectedInstructor))
-          .map((d) => d.period))
-      .filter(Boolean)
-  )].sort();
-  const allGroups = [...new Set(
-    (rosterGroups.length
-      ? rosterRows
-          .filter(
-            (m) =>
-              (!selectedSchool || m.school_code === selectedSchool) &&
-              (!selectedInstructor || m.instructor === selectedInstructor) &&
-              (!selectedPeriod || m.period === selectedPeriod)
-          )
-          .map((m) => m.group_code)
-      : rawData
-          .filter(
-            (d) =>
-              (!selectedSchool || d.school === selectedSchool) &&
-              (!selectedInstructor || d.instructor === selectedInstructor) &&
-              (!selectedPeriod || d.period === selectedPeriod)
-          )
-          .map((d) => d.group))
-      .filter(Boolean)
-  )].sort();
-
-  const structurePeriods = periodsFromClassStructure(resolvedClassStructure);
-  const periodForGroups =
-    selectedPeriod ||
-    filters.period ||
-    structurePeriods[0] ||
-    allPeriods[0] ||
-    'P1';
-  const structureGroups = groupsForPeriodFromStructure(resolvedClassStructure, periodForGroups);
-
-  const mergedPeriods = [...new Set([...structurePeriods, ...allPeriods])];
-  const effectivePeriods = structurePeriods.length
-    ? [...structurePeriods].sort(compareHierarchyToken)
-    : mergedPeriods.length
-      ? mergedPeriods.sort(compareHierarchyToken)
-      : ['P1'];
-
-  const mergedGroups = [...new Set([...structureGroups, ...allGroups])];
-  const effectiveGroups = structureGroups.length
-    ? [...structureGroups].sort(compareHierarchyToken)
-    : mergedGroups.length > 0
-      ? mergedGroups.sort(compareHierarchyToken)
-      : ['G1', 'G2', 'G3', 'G4'].sort(compareHierarchyToken);
 
   // Filter data
   let filteredData = rawData.filter(row => {
-    const matchesSearch = 
-      String(row.location || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      `${row.latitude}, ${row.longitude}`.includes(searchTerm) ||
-      String(row.sessionId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.sessionName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.date.includes(searchTerm) ||
-      row.group.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.school.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.instructor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.period.toLowerCase().includes(searchTerm.toLowerCase());
+    const q = appliedSearch.toLowerCase();
+    const matchesSearch =
+      String(row.location || '').toLowerCase().includes(q) ||
+      `${row.latitude}, ${row.longitude}`.includes(appliedSearch) ||
+      String(row.sessionId || '').toLowerCase().includes(q) ||
+      row.sessionName.toLowerCase().includes(q) ||
+      row.date.includes(appliedSearch) ||
+      row.group.toLowerCase().includes(q) ||
+      row.school.toLowerCase().includes(q) ||
+      row.instructor.toLowerCase().includes(q) ||
+      row.period.toLowerCase().includes(q);
+
+    const matchesLocation = appliedLocation === 'all' || row.location === appliedLocation;
+
+    // Scope tab (Group / Class / School) + visibility — shared with the Location options.
+    const matchesScope = rowInScope(row);
+    const matchesVisibility = rowVisible(row);
     
-    const matchesLocation = locationFilter === 'all' || row.location === locationFilter;
-    const matchesSession = sessionFilter === 'all' || row.sessionId === sessionFilter;
-    
-    const matchesSchool =
-      !selectedSchool || isBlankHierarchyField(row.school) || row.school === selectedSchool;
-    const matchesInstructor =
-      !selectedInstructor || isBlankHierarchyField(row.instructor) || row.instructor === selectedInstructor;
-    const matchesPeriod =
-      !selectedPeriod || isBlankHierarchyField(row.period) || row.period === selectedPeriod;
-    const matchesGroup =
-      !selectedGroup || isBlankHierarchyField(row.group) || row.group === selectedGroup;
-    
-    const matchesDate = () => {
-      if (dateFilter === 'all') return true;
-      const rowDate = new Date(row.date);
-      const today = new Date();
-      
-      switch(dateFilter) {
-        case 'today':
-          return rowDate.toDateString() === today.toDateString();
-        case 'week':
-          const weekAgo = new Date(today);
-          weekAgo.setDate(weekAgo.getDate() - 7);
-          return rowDate >= weekAgo;
-        case 'month':
-          const monthAgo = new Date(today);
-          monthAgo.setMonth(monthAgo.getMonth() - 1);
-          return rowDate >= monthAgo;
-        default:
-          return true;
-      }
-    };
-    
-    return matchesSearch && matchesLocation && matchesSession && matchesDate() && 
-           matchesSchool && matchesInstructor && matchesPeriod && matchesGroup;
+    // Date: no dates picked = no date filter; otherwise the row's date must be selected.
+    const matchesDate = appliedDates.size === 0 || appliedDates.has(row.date);
+
+    return matchesSearch && matchesLocation && matchesDate &&
+           matchesScope && matchesVisibility;
   });
 
   // Sort data
@@ -305,7 +275,30 @@ const RawDataView = ({
     });
   };
 
-  const handleExport = () => {
+  const applyFilters = () => {
+    setAppliedSearch(searchTerm);
+    setAppliedDates(new Set(selectedDatesDraft));
+    setAppliedLocation(locationFilter);
+    setAppliedMetrics(metricsDraft);
+    setOpenChip(null);
+    setCurrentPage(1);
+  };
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setSelectedDatesDraft(new Set());
+    setLocationFilter('all');
+    setMetricsDraft(ALL_METRICS_ON);
+    setAppliedSearch('');
+    setAppliedDates(new Set());
+    setAppliedLocation('all');
+    setAppliedMetrics(ALL_METRICS_ON);
+    setOpenChip(null);
+    setCurrentPage(1);
+  };
+
+  // Build the CSV for the CURRENT FILTERED VIEW (filteredData), full column set.
+  const buildExportCsv = () => {
     const rows = [];
     filteredData.forEach((row) => {
       const detailed = generateDetailedData(row);
@@ -336,22 +329,76 @@ const RawDataView = ({
     });
 
     const csvContent = [SENSOR_CSV_EXPORT_HEADERS.join(','), ...rows].join('\n');
-    
-    // Download
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    
-    // Construct filename: air-quality-data-YYYY-MM-DD-SCHOOL-CLASS-PERIOD-GROUP.csv
     const dateStr = new Date().toISOString().split('T')[0];
     const schoolStr = selectedSchool || filters.school || 'ALL';
     const instructorStr = selectedInstructor || filters.instructor || 'ALL';
     const periodStr = selectedPeriod || filters.period || 'ALL';
     const groupStr = selectedGroup || filters.group || 'ALL';
-    
-    a.download = `air-quality-data-${dateStr}-${schoolStr}-${instructorStr}-${periodStr}-${groupStr}.csv`;
+    const filename = `air-quality-data-${dateStr}-${schoolStr}-${instructorStr}-${periodStr}-${groupStr}.csv`;
+    return { csvContent, filename };
+  };
+
+  const downloadCsvFile = (csvContent, filename) => {
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
     a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Export menu → "Download CSV": standard browser download.
+  const handleDownloadCsv = () => {
+    const { csvContent, filename } = buildExportCsv();
+    downloadCsvFile(csvContent, filename);
+    setExportMenuOpen(false);
+  };
+
+  // Export menu → "Save CSV as…": native file picker where supported (Chrome/Edge);
+  // silent fallback to a normal download elsewhere (Safari/Firefox).
+  const handleSaveCsvAs = async () => {
+    const { csvContent, filename } = buildExportCsv();
+    setExportMenuOpen(false);
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(csvContent);
+        await writable.close();
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // user cancelled the picker
+        // any other error → fall through to a normal download
+      }
+    }
+    downloadCsvFile(csvContent, filename);
+  };
+
+  // Share the current filtered CSV via the device share sheet; fall back to a
+  // download + a pre-filled mailto draft where file sharing is unsupported.
+  const handleShareCsv = async () => {
+    const { csvContent, filename } = buildExportCsv();
+    const file = new File([csvContent], filename, { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      try {
+        await navigator.share({ files: [file], title: 'AirStory data export' });
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // user dismissed the share sheet
+        // any other error → fall through to the mailto fallback
+      }
+    }
+    downloadCsvFile(csvContent, filename);
+    const subject = encodeURIComponent('AirStory data export');
+    const body = encodeURIComponent(
+      `The AirStory data export (${filename}) has been downloaded to your device.\n\n` +
+        'Please attach that file to this email before sending.'
+    );
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
   };
 
   const handleImportCsv = async (event) => {
@@ -360,18 +407,24 @@ const RawDataView = ({
     try {
       const text = await file.text();
       const rawRows = parseImportedCsvRaw(text);
-      const imported = parseImportedCsv(text);
+      const imported = parseImportedCsv(text).map((r) => ({
+        ...r,
+        // Imported rows carry no visibility field yet → default to "School only".
+        visibility: r.visibility || 'school',
+      }));
       importGenerationRef.current += 1;
       // Always show imported data in UI immediately.
       setRawData(imported);
       setImportedMeasurements(imported);
       onImportedDataChanged?.();
       setImportError('');
-      // Historical CSVs are often hidden by "today" or session chips; widen filters after import.
-      setDateFilter('all');
+      // Historical CSVs are often hidden by date/location chips; widen filters after import.
+      setSelectedDatesDraft(new Set());
       setLocationFilter('all');
-      setSessionFilter('all');
       setSearchTerm('');
+      setAppliedDates(new Set());
+      setAppliedLocation('all');
+      setAppliedSearch('');
 
       const inferred = uniqueHierarchyFromImportedRows(imported);
       setFilters((prev) => ({
@@ -549,7 +602,7 @@ const RawDataView = ({
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Raw Data</h1>
           <p className="text-gray-600">
-            Complete dataset with all measurements {workspaceId ? '(backend/import)' : '(import CSV to begin)'}
+            Explore air quality data from your group, class, and school
           </p>
           {loadingBackend && <p className="text-xs text-gray-500 mt-1">Loading backend data...</p>}
           {importError && <p className="text-xs text-red-600 mt-1">{importError}</p>}
@@ -561,7 +614,12 @@ const RawDataView = ({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col items-end gap-2">
+          {/* Read-only identity: your School · Class (teacher · period) · Group */}
+          <div className="text-xs font-semibold text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-3 py-1">
+            {viewerIdentity.school} · {primaryMembership.instructor} · {primaryMembership.period} · {primaryMembership.group}
+          </div>
+          <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all cursor-pointer">
             <Upload className="w-4 h-4" />
             Import CSV
@@ -580,216 +638,226 @@ const RawDataView = ({
             <Info className="w-4 h-4" />
             How to Use Raw Data
           </button>
-        <button 
-          onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
-        >
-          <Download className="w-4 h-4" />
-          Export CSV
-        </button>
-        </div>
-      </div>
-
-      {/* Team/Group Hierarchy Selectors */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Select Team Data</h2>
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <Info className="w-4 h-4" />
-            <span>Select School, Class, Period, and Group to view specific data</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* School Selector */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">School</label>
-            <select
-              value={selectedSchool}
-              onChange={(e) => {
-                const nextSchool = e.target.value;
-                setSelectedSchool(nextSchool);
-                setSelectedInstructor('');
-                setSelectedPeriod('');
-                setSelectedGroup('');
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-            >
-              <option value="">Select School</option>
-              {allSchools.map(s => <option key={s} value={s}>{s === viewerProfile?.school ? `${s} (My School)` : s}</option>)}
-            </select>
-          </div>
-
-          {/* Class (Instructor) Selector */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Class (Instructor)</label>
-            <select
-              value={selectedInstructor}
-              disabled={!selectedSchool}
-              onChange={(e) => {
-                const nextInstructor = e.target.value;
-                setSelectedInstructor(nextInstructor);
-                setSelectedPeriod('');
-                setSelectedGroup('');
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
-            >
-              <option value="">Select Class</option>
-              {allInstructors.map(i => <option key={i} value={i}>{i === viewerProfile?.instructor ? `${i} (My Class)` : i}</option>)}
-            </select>
-          </div>
-
-          {/* Period Selector */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Period</label>
-            <select
-              value={selectedPeriod}
-              disabled={!selectedInstructor}
-              onChange={(e) => {
-                const nextPeriod = e.target.value;
-                setSelectedPeriod(nextPeriod);
-                setSelectedGroup('');
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
-            >
-              <option value="">Select Period</option>
-              {effectivePeriods.map(p => <option key={p} value={p}>{p === viewerProfile?.period ? `${p} (My Period)` : p}</option>)}
-            </select>
-          </div>
-
-          {/* Group Selector */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Group</label>
-            <select
-              value={selectedGroup}
-              disabled={!selectedPeriod}
-              onChange={(e) => {
-                const nextGroup = e.target.value;
-                setSelectedGroup(nextGroup);
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
-            >
-              <option value="">Select Group</option>
-              {effectiveGroups.map(g => <option key={g} value={g}>{g === viewerProfile?.group ? `${g} (My Team)` : g}</option>)}
-            </select>
-          </div>
-        </div>
-        {(selectedSchool || selectedInstructor || selectedPeriod || selectedGroup) && (
-          <div className="mt-4 flex justify-end">
-            <button 
-              onClick={() => {
-                setSelectedSchool('');
-                setSelectedInstructor('');
-                setSelectedPeriod('');
-                setSelectedGroup('');
-              }}
-              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-            >
-              Reset Hierarchy
-            </button>
-        </div>
-        )}
-      </div>
-
-      {/* Filters and Search */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          {/* Search */}
-          <div className="md:col-span-2">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Search</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search by location, session, date, school, or group..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-          </div>
-
-          {/* Session Filter */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Session</label>
-            <div className="relative">
-              <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <select
-                value={sessionFilter}
-                onChange={(e) => setSessionFilter(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white"
-              >
-                <option value="all">All Sessions</option>
-                {sessions.map(session => (
-                  <option key={session.id} value={session.id}>{session.name}</option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Date Filter */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Date Range</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <select
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white"
-              >
-                <option value="all">All Time</option>
-                <option value="today">Today</option>
-                <option value="week">Last 7 Days</option>
-                <option value="month">Last 30 Days</option>
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Location Filter */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Location</label>
-            <div className="relative">
-              <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <select
-                value={locationFilter}
-                onChange={(e) => setLocationFilter(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white"
-              >
-                <option value="all">All Locations</option>
-                {locations.map(loc => (
-                  <option key={loc} value={loc}>{loc}</option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-        </div>
-
-        {/* Results Summary */}
-        <div className="mt-4 flex items-center justify-between text-sm">
-          <p className="text-gray-600">
-            Showing <span className="font-semibold text-gray-900">{paginatedData.length}</span> of{' '}
-            <span className="font-semibold text-gray-900">{filteredData.length}</span> records
-          </p>
-          {(searchTerm || dateFilter !== 'all' || locationFilter !== 'all' || sessionFilter !== 'all' || selectedSchool || selectedInstructor || selectedPeriod || selectedGroup) && (
+          <div className="relative">
             <button
-              onClick={() => {
-                setSearchTerm('');
-                setDateFilter('all');
-                setLocationFilter('all');
-                setSessionFilter('all');
-                setSelectedSchool('');
-                setSelectedInstructor('');
-                setSelectedPeriod('');
-                setSelectedGroup('');
-              }}
-              className="text-blue-600 hover:text-blue-700 font-medium"
+              onClick={() => setExportMenuOpen((o) => !o)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
             >
-              Clear Filters
+              <Download className="w-4 h-4" />
+              Export CSV
+              <ChevronDown className="w-4 h-4" />
             </button>
+            {exportMenuOpen && (
+              <div className="absolute right-0 z-20 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg p-1">
+                <button
+                  onClick={handleDownloadCsv}
+                  className="block w-full text-left px-3 py-2 text-sm text-gray-700 rounded-md hover:bg-gray-50"
+                >
+                  Download CSV
+                </button>
+                <button
+                  onClick={handleSaveCsvAs}
+                  className="block w-full text-left px-3 py-2 text-sm text-gray-700 rounded-md hover:bg-gray-50"
+                >
+                  Save CSV as…
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleShareCsv}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-all"
+          >
+            <Share2 className="w-4 h-4" />
+            Share
+          </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Merged toolbar: scope tabs · search · filter chips · Apply / Clear */}
+      <div className="bg-white rounded-2xl p-4 shadow-lg border border-gray-200">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Scope tabs */}
+          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+            {[
+              { id: 'school', label: 'School' },
+              { id: 'class', label: 'Class' },
+              { id: 'group', label: 'Group' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setScopeTab(tab.id)}
+                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                  scopeTab === tab.id ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Scope selector (Group / Class) */}
+          {scopeTab === 'group' && (
+            <div className="flex items-center gap-2">
+              <select
+                value={scopeGroup}
+                onChange={(e) => setScopeGroup(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                {groupsForSelectedClass.map((g) => (
+                  <option key={g} value={g}>{g === viewerGroupForClass(scopeClassKey) ? `${g} (My Group)` : g}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500 whitespace-nowrap">in {selectedClassLabel}</span>
+            </div>
+          )}
+          {scopeTab === 'class' && (
+            <select
+              value={scopeClassKey}
+              onChange={(e) => selectClassContext(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              {classPeriods.map((c) => (
+                <option key={c.key} value={c.key}>{viewerClassKeys.includes(c.key) ? `${c.label} (My Class)` : c.label}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Search */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') applyFilters(); }}
+              placeholder="Search location, session, group..."
+              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+
+          {/* Date range chip → custom calendar */}
+          <div className="relative">
+            <button
+              onClick={() => setOpenChip(openChip === 'date' ? null : 'date')}
+              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
+                selectedDatesDraft.size > 0 ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Calendar className="w-4 h-4" />
+              {selectedDatesDraft.size > 0
+                ? `${selectedDatesDraft.size} date${selectedDatesDraft.size > 1 ? 's' : ''}`
+                : 'Date range'}
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {openChip === 'date' && (
+              <div className="absolute right-0 z-20 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-3">
+                <DataCalendar
+                  dataDates={dataDates}
+                  selectedDates={selectedDatesDraft}
+                  onChange={setSelectedDatesDraft}
+                  initialMonthKey={[...dataDates].sort().slice(-1)[0]?.slice(0, 7)}
+                />
+                {selectedDatesDraft.size > 0 && (
+                  <button
+                    onClick={() => setSelectedDatesDraft(new Set())}
+                    className="mt-2 w-full text-center text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Clear dates
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Metrics chip */}
+          <div className="relative">
+            <button
+              onClick={() => setOpenChip(openChip === 'metrics' ? null : 'metrics')}
+              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
+                METRIC_KEYS.some((m) => !metricsDraft[m.key]) ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Filter className="w-4 h-4" />
+              Metrics
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {openChip === 'metrics' && (
+              <div className="absolute right-0 z-20 mt-2 w-44 bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-1">
+                {METRIC_KEYS.map((m) => (
+                  <label key={m.key} className="flex items-center gap-2 px-2 py-1 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded">
+                    <input
+                      type="checkbox"
+                      checked={!!metricsDraft[m.key]}
+                      onChange={(e) => setMetricsDraft((prev) => ({ ...prev, [m.key]: e.target.checked }))}
+                    />
+                    {m.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Location chip */}
+          <div className="relative">
+            <button
+              onClick={() => setOpenChip(openChip === 'location' ? null : 'location')}
+              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
+                locationFilter !== 'all' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Filter className="w-4 h-4" />
+              {locationFilter === 'all' ? 'Location' : locationFilter}
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {openChip === 'location' && (
+              <div className="absolute right-0 z-20 mt-2 w-52 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg p-1">
+                <button
+                  onClick={() => { setLocationFilter('all'); setOpenChip(null); }}
+                  className={`block w-full text-left px-3 py-1.5 text-sm rounded-md ${locationFilter === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                >
+                  All Locations
+                </button>
+                {locations.map((loc) => (
+                  <button
+                    key={loc}
+                    onClick={() => { setLocationFilter(loc); setOpenChip(null); }}
+                    className={`block w-full text-left px-3 py-1.5 text-sm rounded-md ${locationFilter === loc ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                  >
+                    {loc}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Apply / Clear */}
+          <button
+            onClick={applyFilters}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
+          >
+            Apply
+          </button>
+          <button
+            onClick={clearFilters}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all"
+          >
+            Clear filters
+          </button>
+
+          {scopeTab === 'school' && (
+            <span className="text-sm text-gray-500 w-full md:w-auto">All sessions across {viewerIdentity.school}.</span>
           )}
         </div>
+      </div>
+
+      {/* Results summary */}
+      <div className="flex items-center justify-between text-sm px-1">
+        <p className="text-gray-600">
+          Showing <span className="font-semibold text-gray-900">{paginatedData.length}</span> of{' '}
+          <span className="font-semibold text-gray-900">{filteredData.length}</span> records
+        </p>
       </div>
 
       {/* Data Table */}
@@ -829,114 +897,12 @@ const RawDataView = ({
                     <SortIcon columnKey="capturedAt" />
                   </div>
                 </th>
-                <th 
-                  onClick={() => handleSort('date')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Date
-                    <SortIcon columnKey="date" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('time')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Time
-                    <SortIcon columnKey="time" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('sessionId')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Session ID
-                    <SortIcon columnKey="sessionId" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('sessionName')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Session Name
-                    <SortIcon columnKey="sessionName" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('school')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    School
-                    <SortIcon columnKey="school" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('instructor')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Class (Instructor)
-                    <SortIcon columnKey="instructor" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('period')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Period
-                    <SortIcon columnKey="period" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('group')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Group
-                    <SortIcon columnKey="group" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('location')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Location
-                    <SortIcon columnKey="location" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('latitude')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Latitude
-                    <SortIcon columnKey="latitude" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => handleSort('longitude')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    Longitude
-                    <SortIcon columnKey="longitude" />
-                  </div>
-                </th>
-                <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                  INDOOR/OUTDOOR
-                </th>
-                <th 
+                <th
                   onClick={() => {
                     setSelectedMetric('pm25');
                     handleSort('pm25');
                   }}
-                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${
+                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.pm25 ? '' : 'hidden'} ${
                     selectedMetric === 'pm25' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
                 >
@@ -945,12 +911,12 @@ const RawDataView = ({
                     <SortIcon columnKey="pm25" />
                   </div>
                 </th>
-                <th 
+                <th
                   onClick={() => {
                     setSelectedMetric('co');
                     handleSort('co');
                   }}
-                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${
+                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.co ? '' : 'hidden'} ${
                     selectedMetric === 'co' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
                 >
@@ -959,12 +925,12 @@ const RawDataView = ({
                     <SortIcon columnKey="co" />
                   </div>
                 </th>
-                <th 
+                <th
                   onClick={() => {
                     setSelectedMetric('temp');
                     handleSort('temp');
                   }}
-                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${
+                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.temp ? '' : 'hidden'} ${
                     selectedMetric === 'temp' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
                 >
@@ -973,12 +939,12 @@ const RawDataView = ({
                     <SortIcon columnKey="temp" />
                   </div>
                 </th>
-                <th 
+                <th
                   onClick={() => {
                     setSelectedMetric('humidity');
                     handleSort('humidity');
                   }}
-                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${
+                  className={`px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.humidity ? '' : 'hidden'} ${
                     selectedMetric === 'humidity' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
                   }`}
                 >
@@ -987,8 +953,77 @@ const RawDataView = ({
                     <SortIcon columnKey="humidity" />
                   </div>
                 </th>
+                <th
+                  onClick={() => handleSort('location')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    Location
+                    <SortIcon columnKey="location" />
+                  </div>
+                </th>
+                <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  INDOOR/OUTDOOR
+                </th>
+                <th
+                  onClick={() => handleSort('latitude')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    Latitude
+                    <SortIcon columnKey="latitude" />
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSort('longitude')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    Longitude
+                    <SortIcon columnKey="longitude" />
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSort('sessionName')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    Session Name
+                    <SortIcon columnKey="sessionName" />
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSort('school')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    School
+                    <SortIcon columnKey="school" />
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSort('instructor')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors whitespace-nowrap"
+                >
+                  <div className="flex items-center gap-2">
+                    Class (teacher · period)
+                    <SortIcon columnKey="instructor" />
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSort('group')}
+                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    Group
+                    <SortIcon columnKey="group" />
+                  </div>
+                </th>
                 <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                   Notes
+                </th>
+                <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  Visibility
                 </th>
               </tr>
             </thead>
@@ -1011,96 +1046,8 @@ const RawDataView = ({
                       <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap font-mono text-xs">
                         {formatSensorTimestamp(row.capturedAt)}
                       </td>
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">{row.date}</td>
-                  <td className="px-4 py-3 text-sm text-gray-600">{row.time}</td>
-                  <td className="px-4 py-3 text-sm font-mono text-xs text-gray-800 max-w-[180px] truncate" title={String(row.sessionId ?? '')}>
-                    {row.sessionId}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.sessionName}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.school}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.instructor}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.period}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.group}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm max-w-[220px]">
-                    <span className="truncate block" title={String(row.location ?? '')}>{row.location || '—'}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm font-mono">
-                    {row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)) ? (
-                      <a
-                        href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 hover:underline"
-                        title="Open in Google Maps"
-                      >
-                        {Number(row.latitude).toFixed(4)}
-                      </a>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm font-mono">
-                    {row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)) ? (
-                      <a
-                        href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 hover:underline"
-                        title="Open in Google Maps"
-                      >
-                        {Number(row.longitude).toFixed(4)}
-                      </a>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-
-                  {/* INDOOR/OUTDOOR */}
-                  <td className="px-4 py-3 text-sm">
-                    {editingCell.rowId === row.id && editingCell.field === 'indoorOutdoor' ? (
-                      <select
-                        defaultValue={row.indoorOutdoor}
-                        autoFocus
-                        onChange={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
-                        onBlur={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
-                        className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                      >
-                        {INDOOR_OUTDOOR_OPTIONS.map((option) => (
-                          <option key={option} value={option}>{option}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <button
-                        onClick={() => setEditingCell({ rowId: row.id, field: 'indoorOutdoor' })}
-                        className="flex items-center gap-2"
-                        title="Click to edit INDOOR/OUTDOOR"
-                      >
-                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                          row.indoorOutdoor === 'INDOOR' 
-                            ? 'bg-blue-100 text-blue-800' 
-                            : 'bg-green-100 text-green-800'
-                        }`}>
-                          {row.indoorOutdoor}
-                        </span>
-                        {isEdited(row.id, 'indoorOutdoor') && (
-                          <span className="text-xs text-orange-600 font-semibold">*</span>
-                        )}
-                      </button>
-                    )}
-                  </td>
-
                   {/* PM 2.5 */}
-                  <td className={`px-4 py-3 text-sm font-semibold ${selectedMetric === 'pm25' ? 'bg-blue-50' : ''}`}>
+                  <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.pm25 ? '' : 'hidden'} ${selectedMetric === 'pm25' ? 'bg-blue-50' : ''}`}>
                     {editingCell.rowId === row.id && editingCell.field === 'pm25' ? (
                       <input
                         type="number"
@@ -1129,7 +1076,7 @@ const RawDataView = ({
                   </td>
 
                   {/* CO */}
-                  <td className={`px-4 py-3 text-sm font-semibold ${selectedMetric === 'co' ? 'bg-purple-50' : ''}`}>
+                  <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.co ? '' : 'hidden'} ${selectedMetric === 'co' ? 'bg-purple-50' : ''}`}>
                     {editingCell.rowId === row.id && editingCell.field === 'co' ? (
                       <input
                         type="number"
@@ -1159,7 +1106,7 @@ const RawDataView = ({
                   </td>
 
                   {/* Temperature */}
-                  <td className={`px-4 py-3 text-sm font-semibold ${selectedMetric === 'temp' ? 'bg-red-50' : ''}`}>
+                  <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.temp ? '' : 'hidden'} ${selectedMetric === 'temp' ? 'bg-red-50' : ''}`}>
                     {editingCell.rowId === row.id && editingCell.field === 'temp' ? (
                       <input
                         type="number"
@@ -1187,7 +1134,7 @@ const RawDataView = ({
                   </td>
 
                   {/* Humidity */}
-                  <td className={`px-4 py-3 text-sm font-semibold ${selectedMetric === 'humidity' ? 'bg-green-50' : ''}`}>
+                  <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.humidity ? '' : 'hidden'} ${selectedMetric === 'humidity' ? 'bg-green-50' : ''}`}>
                     {editingCell.rowId === row.id && editingCell.field === 'humidity' ? (
                       <input
                         type="number"
@@ -1214,6 +1161,99 @@ const RawDataView = ({
                         )}
                       </button>
                     )}
+                  </td>
+
+                  {/* Location */}
+                  <td className="px-4 py-3 text-sm max-w-[220px]">
+                    <span className="truncate block" title={String(row.location ?? '')}>{row.location || '—'}</span>
+                  </td>
+
+                  {/* INDOOR/OUTDOOR */}
+                  <td className="px-4 py-3 text-sm">
+                    {editingCell.rowId === row.id && editingCell.field === 'indoorOutdoor' ? (
+                      <select
+                        defaultValue={row.indoorOutdoor}
+                        autoFocus
+                        onChange={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
+                        onBlur={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
+                        className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        {INDOOR_OUTDOOR_OPTIONS.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button
+                        onClick={() => setEditingCell({ rowId: row.id, field: 'indoorOutdoor' })}
+                        className="flex items-center gap-2"
+                        title="Click to edit INDOOR/OUTDOOR"
+                      >
+                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                          row.indoorOutdoor === 'INDOOR'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {row.indoorOutdoor}
+                        </span>
+                        {isEdited(row.id, 'indoorOutdoor') && (
+                          <span className="text-xs text-orange-600 font-semibold">*</span>
+                        )}
+                      </button>
+                    )}
+                  </td>
+
+                  {/* Latitude */}
+                  <td className="px-4 py-3 text-sm font-mono">
+                    {row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)) ? (
+                      <a
+                        href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                        title="Open in Google Maps"
+                      >
+                        {Number(row.latitude).toFixed(4)}
+                      </a>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+
+                  {/* Longitude */}
+                  <td className="px-4 py-3 text-sm font-mono">
+                    {row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)) ? (
+                      <a
+                        href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                        title="Open in Google Maps"
+                      >
+                        {Number(row.longitude).toFixed(4)}
+                      </a>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+
+                  {/* Session Name */}
+                  <td className="px-4 py-3 text-sm">
+                    <span className="font-medium text-gray-900">{row.sessionName}</span>
+                  </td>
+
+                  {/* School */}
+                  <td className="px-4 py-3 text-sm">
+                    <span className="font-medium text-gray-900">{row.school}</span>
+                  </td>
+
+                  {/* Class (teacher · period) */}
+                  <td className="px-4 py-3 text-sm whitespace-nowrap">
+                    <span className="font-medium text-gray-900">{row.instructor} · {row.period}</span>
+                  </td>
+
+                  {/* Group */}
+                  <td className="px-4 py-3 text-sm">
+                    <span className="font-medium text-gray-900">{row.group}</span>
                   </td>
 
                   {/* Notes */}
@@ -1251,10 +1291,21 @@ const RawDataView = ({
                       </button>
                     )}
                   </td>
+
+                  {/* Visibility (read-only pill) */}
+                  <td className="px-4 py-3 text-sm">
+                    {VISIBILITY_META[row.visibility] ? (
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${VISIBILITY_META[row.visibility].cls}`}>
+                        {VISIBILITY_META[row.visibility].label}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan="19" className="px-4 py-4 bg-gray-50 border-t-2 border-gray-300">
+                    <td colSpan="16" className="px-4 py-4 bg-gray-50 border-t-2 border-gray-300">
                       <div className="space-y-4">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="font-semibold text-gray-900">Detailed Second-by-Second Data</h4>

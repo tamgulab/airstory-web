@@ -79,11 +79,15 @@ const METRIC_THEMES = {
 // Flip DEV_SKIP_LOGIN to false (or delete this block) to restore the normal login flow.
 // When true, the app skips LandingPage and opens directly on Raw Data as a fake signed-in user.
 const DEV_SKIP_LOGIN = true;
+// DEV ONLY - REMOVE BEFORE DEPLOY: which role the bypass signs in as.
+// "teacher" renders the teacher-only UI (Manage Classes, teacher nav/labels);
+// "student" is the prior behavior. Flip back to "student" when done previewing.
+const DEV_ROLE = "teacher"; // "teacher" | "student"
 const DEV_FAKE_USER = {
   accessToken: "dev-fake-token",
   user: {
     workspaceId: "dev-workspace",
-    fullName: "Dev Tester",
+    fullName: DEV_ROLE === "teacher" ? "Ms. Rivera" : "Dev Tester",
   },
 };
 
@@ -94,7 +98,7 @@ export default function App() {
     DEV_SKIP_LOGIN ? true : Boolean(storedAuth?.accessToken)
   );
   const [activeSection, setActiveSection] = useState(
-    DEV_SKIP_LOGIN ? "rawdata" : "heatmap"
+    DEV_SKIP_LOGIN ? (DEV_ROLE === "teacher" ? "manageclasses" : "rawdata") : "heatmap"
   );
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
@@ -102,13 +106,15 @@ export default function App() {
   const [workspaceId, setWorkspaceId] = useState(
     DEV_SKIP_LOGIN ? DEV_FAKE_USER.user.workspaceId : (storedAuth?.user?.workspaceId || "")
   );
-  const [userRole, setUserRole] = useState("student");
+  // DEV ONLY - REMOVE BEFORE DEPLOY: start as the dev role when the bypass is on.
+  const [userRole, setUserRole] = useState(DEV_SKIP_LOGIN ? DEV_ROLE : "student");
   const [viewerProfile, setViewerProfile] = useState({
     // DEV ONLY - REMOVE BEFORE DEPLOY: show the fake dev user's name when the flag is on.
     displayName: DEV_SKIP_LOGIN ? DEV_FAKE_USER.user.fullName : (storedAuth?.user?.fullName || ""),
-    school: "",
-    instructor: "",
-    period: "",
+    // DEV ONLY - REMOVE BEFORE DEPLOY: seed a teacher identity so teacher-only UI has a name/school.
+    school: DEV_SKIP_LOGIN && DEV_ROLE === "teacher" ? "LINCOLN" : "",
+    instructor: DEV_SKIP_LOGIN && DEV_ROLE === "teacher" ? "Ms. Rivera" : "",
+    period: DEV_SKIP_LOGIN && DEV_ROLE === "teacher" ? "P3" : "",
     group: "",
     studentId: "",
   });

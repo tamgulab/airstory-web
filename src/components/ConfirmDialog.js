@@ -22,6 +22,7 @@ export default function ConfirmDialog({
   message,
   confirmLabel = 'Delete',
   cancelLabel = 'Cancel',
+  confirmIcon = <Trash2 className="w-4 h-4" />,
   onConfirm,
   onCancel,
 }) {
@@ -78,7 +79,7 @@ export default function ConfirmDialog({
               isDanger ? 'bg-red-600 hover:bg-red-700 focus:ring-red-400' : 'bg-red-500 hover:bg-red-600 focus:ring-red-300'
             }`}
           >
-            <Trash2 className="w-4 h-4" />
+            {confirmIcon}
             {confirmLabel}
           </button>
         </div>

@@ -47,13 +47,14 @@ const fToC = (f) => Math.round(((Number(f) - 32) * 5) / 9);
 // Read-only visibility pills (Section 4). Visibility is set on the phone before upload.
 // TODO(backend): replace mock `visibility` with the real `visibility` field once
 // GET /workspaces/:id/measurements returns it (see mockMeasurements.js).
+// Three levels: Group only (default) | School only | Public.
+// TODO(researcher-mode): 'class'/'me' removed for now — reserved for a future researcher mode.
 const VISIBILITY_META = {
-  public: { label: 'Public', cls: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
+  group: { label: 'Group only', cls: 'bg-purple-100 text-purple-800', dot: 'bg-purple-500' },
   school: { label: 'School only', cls: 'bg-blue-100 text-blue-800', dot: 'bg-blue-500' },
-  class: { label: 'Class only', cls: 'bg-purple-100 text-purple-800', dot: 'bg-purple-500' },
-  me: { label: 'Me only', cls: 'bg-gray-200 text-gray-700', dot: 'bg-gray-500' },
+  public: { label: 'Public', cls: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
 };
-const VISIBILITY_OPTIONS = ['public', 'school', 'class', 'me'];
+const VISIBILITY_OPTIONS = ['group', 'school', 'public']; // Group only is the default
 
 const INDOOR_OUTDOOR_OPTIONS = ['INDOOR', 'OUTDOOR'];
 
@@ -472,7 +473,8 @@ const RawDataView = ({
       const rawRows = parseImportedCsvRaw(text);
       const imported = parseImportedCsv(text).map((r) => ({
         ...r,
-        // Imported rows carry no visibility field yet → default to "School only".
+        // CSV imports are teacher bulk loads → default to "School only".
+        // (App uploads / new classes use the model default, "Group only".)
         visibility: r.visibility || 'school',
       }));
       importGenerationRef.current += 1;

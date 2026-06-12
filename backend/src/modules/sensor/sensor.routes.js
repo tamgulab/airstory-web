@@ -153,7 +153,7 @@ router.get(
         s.period,
         s.group_code,
         s.visibility,
-        s.owner_student_code
+        s.owner_student_code,
         COALESCE(ed.latest_edits, '{}'::jsonb) AS edits
       FROM measurements m
       JOIN sessions s ON s.id = m.session_id

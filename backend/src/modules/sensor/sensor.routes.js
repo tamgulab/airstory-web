@@ -12,6 +12,7 @@ import {
 
 const router = express.Router();
 
+/**Runs on every request that reaches this router before handler */
 router.use(requireAuth);
 
 router.get(
@@ -38,11 +39,12 @@ router.post(
     const body = req.validated.body;
     const result = await pool.query(
       `INSERT INTO sessions (
-        workspace_id, created_by, session_code, name, notes, location_name,
-        school_code, instructor, period, group_code, started_at, ended_at
+        workspace_id, created_by, session_code, name, notes,
+        location_name, school_code, instructor, period, group_code,
+        started_at, ended_at, visibility, owner_student_code
       ) VALUES (
         $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12
+        $7, $8, $9, $10, $11, $12, $13, $14
       )
       RETURNING *`,
       [
@@ -58,6 +60,8 @@ router.post(
         body.groupCode,
         body.startedAt || null,
         body.endedAt || null,
+        body.visibility,
+        body.ownerCode || '',
       ]
     );
     res.status(201).json({ session: result.rows[0] });
@@ -229,8 +233,8 @@ router.post(
             const created = await client.query(
               `INSERT INTO sessions (
                 workspace_id, created_by, session_code, name, notes, location_name,
-                school_code, instructor, period, group_code
-              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                school_code, instructor, period, group_code, visibility, owner_student_code
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
               RETURNING id`,
               [
                 workspaceId,
@@ -243,6 +247,8 @@ router.post(
                 row.instructor || "",
                 row.period || "",
                 row.group || "",
+                row.visibility,
+                row.ownerCode || '',
               ]
             );
             sessionId = created.rows[0].id;

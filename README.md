@@ -1,4 +1,4 @@
-# AIRSTORY (PHG)
+# AIRSTORY
 
 Air quality classroom platform: React dashboard + Express/Postgres API.
 
@@ -56,7 +56,7 @@ Then install dependencies, run migrations, and seed the database:
 ```bash
 npm install
 npm run db:migrate   # create tables
-npm run db:seed      # create teacher account + PHG01 workspace
+npm run db:seed      # seed Lincoln workspace: teacher, 10 students, 14 sessions
 ```
 
 Start the backend:
@@ -80,9 +80,10 @@ No `.env` file is needed for local dev — the frontend automatically points to 
 
 | Role | Email | Password |
 |---|---|---|
-| Teacher | `sikich@tamgu.com` | `sikich2026` |
+| Teacher | `rivera@lincoln.mock` | `rivera2026` |
+| Student (any) | `ava.martinez@lincoln.mock` | `lincoln2026` |
 
-Open Manage Classes to generate a join code and create student accounts.
+The seed creates 14 sessions with full per-second measurements. Open Manage Classes to inspect join codes and the student roster.
 
 ### Useful commands
 
@@ -93,5 +94,4 @@ Open Manage Classes to generate a join code and create student accounts.
 | `docker compose down` | Stop the database (Switching branches/Done with project)|
 | `docker compose down -v` | Fresh database
 | `npm run db:migrate` | Apply schema migrations |
-| `npm run db:seed` | Reset PHG01 workspace + recreate teacher account |
-| `npm run db:upsert-teacher` | Recreate teacher account only (non-destructive) |
+| `npm run db:seed` | Reset Lincoln workspace (teacher + students + sessions + measurements) |

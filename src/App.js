@@ -6,6 +6,8 @@ import AnalysisView from "./components/AnalysisView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
 import { MapPin, Table, BarChart3, User, LogOut, Users } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "./firebase";
 import {
   login as loginApi,
   register as registerApi,
@@ -13,7 +15,6 @@ import {
   logout as logoutApi,
   getClassStructure,
 } from "./api/auth";
-import { getStoredAuth } from "./api/http";
 import { getMeasurements } from "./api/data";
 import {
   setImportedMeasurements,
@@ -77,15 +78,14 @@ const METRIC_THEMES = {
 
 
 export default function App() {
-  const storedAuth = getStoredAuth();
-  const [isLoggedIn, setIsLoggedIn] = useState(Boolean(storedAuth?.accessToken));
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [activeSection, setActiveSection] = useState("heatmap");
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
-  const [workspaceId, setWorkspaceId] = useState(storedAuth?.user?.workspaceId || "");
+  const [workspaceId, setWorkspaceId] = useState("");
   const [userRole, setUserRole] = useState("student");
   const [viewerProfile, setViewerProfile] = useState({
-    displayName: storedAuth?.user?.fullName || "",
+    displayName: "",
     school: "",
     instructor: "",
     period: "",
@@ -127,6 +127,15 @@ export default function App() {
     refreshClassStructure();
   }, [refreshClassStructure]);
 
+  // Restore (and track) the Firebase session. Fires on mount with the persisted user, if any,
+  // and on every sign-in/sign-out. syncFromMe (gated on isLoggedIn) then hydrates the app profile.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setIsLoggedIn(Boolean(user));
+    });
+    return unsubscribe;
+  }, []);
+
   const syncFromMe = useCallback(async () => {
     if (!isLoggedIn) return;
     try {
@@ -135,6 +144,9 @@ export default function App() {
       const profile = me?.profile || null;
       const nextRole = membership?.role || userRole || "student";
       const isTeacherRole = nextRole === "teacher" || nextRole === "owner";
+      // On a fresh page load there is no persisted workspace id (Firebase only restores identity),
+      // so hydrate it here from the membership returned by the backend.
+      if (membership?.workspace_id) setWorkspaceId(membership.workspace_id);
       setUserRole(nextRole);
       setViewerProfile((prev) => ({
         ...prev,
@@ -312,10 +324,10 @@ export default function App() {
     setAuthError("");
     setAuthLoading(true);
     try {
-      const auth = getStoredAuth();
       // Students always join via join code only; never reuse a stale workspace id from
-      // another session or the API may treat the signup inconsistently.
-      const joinWorkspaceId = mode === "teacher" ? auth?.user?.workspaceId || undefined : undefined;
+      // another session or the API may treat the signup inconsistently. A teacher creating
+      // another account from an active session reuses the current workspace.
+      const joinWorkspaceId = mode === "teacher" ? workspaceId || undefined : undefined;
       const session = await registerApi({
         email,
         password,

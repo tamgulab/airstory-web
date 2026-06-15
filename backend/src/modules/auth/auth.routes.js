@@ -1,15 +1,11 @@
 import express from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { pool } from "../../db/pool.js";
-import { env } from "../../config/env.js";
-import { requireAuth, requireWorkspaceRole, signAccessToken, signRefreshToken } from "../../middleware/auth.js";
+import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
+import { firebaseAuth } from "../../config/firebase-admin.js";
 import { validate } from "../../middleware/validate.js";
 import {
-  changePasswordSchema,
   createJoinCodeSchema,
   getJoinCodeConfigSchema,
-  loginSchema,
   removeStudentSchema,
   registerSchema,
   resetStudentPasswordSchema,
@@ -37,11 +33,9 @@ async function getWorkspaceStructure(workspaceId) {
   return buildStructure(result.rows[0].period_count, result.rows[0].group_count);
 }
 
-function makeAuthResponse(user, workspaceId) {
-  const payload = { userId: user.id, email: user.email };
+function makeUserResponse(user, workspaceId) {
+  // Identity/session is owned by Firebase on the client; the backend only returns the app profile.
   return {
-    accessToken: signAccessToken(payload),
-    refreshToken: signRefreshToken(payload),
     user: {
       id: user.id,
       email: user.email,
@@ -52,11 +46,23 @@ function makeAuthResponse(user, workspaceId) {
 }
 
 router.post("/register", validate(registerSchema), async (req, res, next) => {
+  // The Firebase account is created on the client first; register provisions the matching app account.
+  // Requires a valid Firebase ID token (the user is already signed in to Firebase).
+  const authHeader = req.headers.authorization || "";
+  const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!idToken) return res.status(401).json({ error: "Missing Firebase auth token" });
+  let decoded;
+  try {
+    decoded = await firebaseAuth().verifyIdToken(idToken);
+  } catch {
+    return res.status(401).json({ error: "Invalid Firebase auth token" });
+  }
+  const firebaseUid = decoded.uid;
+
   const client = await pool.connect();
   try {
     const {
       email,
-      password,
       fullName,
       workspaceName,
       role,
@@ -68,14 +74,23 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       joinWorkspaceId,
     joinCode,
     } = req.validated.body;
-    const passwordHash = await bcrypt.hash(password, 10);
+    // The verified token email is the source of truth for identity; fall back to the posted email.
+    const accountEmail = String(decoded.email || email).trim().toLowerCase();
 
     await client.query("BEGIN");
+
+    // Reject duplicate provisioning so a second /register can't fork a user's workspace.
+    const existing = await client.query(`SELECT 1 FROM users WHERE firebase_uid = $1`, [firebaseUid]);
+    if (existing.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Account already registered" });
+    }
+
     const userResult = await client.query(
-      `INSERT INTO users (email, password_hash, full_name)
+      `INSERT INTO users (email, firebase_uid, full_name)
        VALUES ($1, $2, $3)
        RETURNING id, email, full_name`,
-      [email, passwordHash, fullName]
+      [accountEmail, firebaseUid, fullName]
     );
     const user = userResult.rows[0];
 
@@ -169,19 +184,15 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       ]
     );
 
-    const auth = makeAuthResponse(user, workspaceId);
-    await client.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-      [user.id, auth.refreshToken]
-    );
-
     await client.query("COMMIT");
-    res.status(201).json(auth);
+    res.status(201).json(makeUserResponse(user, workspaceId));
   } catch (error) {
     await client.query("ROLLBACK");
     if (String(error.message).includes("users_email_key")) {
       return res.status(409).json({ error: "Email already exists" });
+    }
+    if (String(error.message).includes("users_firebase_uid_key")) {
+      return res.status(409).json({ error: "Account already registered" });
     }
     return next(error);
   } finally {
@@ -189,87 +200,10 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
   }
 });
 
-router.post("/login", validate(loginSchema), async (req, res, next) => {
-  try {
-    const { email, password } = req.validated.body;
-    const userResult = await pool.query(
-      `SELECT id, email, full_name, password_hash FROM users
-       WHERE LOWER(TRIM(email)) = $1`,
-      [email]
-    );
-    if (!userResult.rowCount) return res.status(401).json({ error: "Invalid credentials" });
-    const user = userResult.rows[0];
-
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: "Invalid credentials" });
-
-    const wsResult = await pool.query(
-      `SELECT wm.workspace_id
-       FROM workspace_memberships wm
-       JOIN workspaces w ON w.id = wm.workspace_id
-       WHERE wm.user_id = $1
-       ORDER BY w.created_at DESC
-       LIMIT 1`,
-      [user.id]
-    );
-    const workspaceId = wsResult.rows[0]?.workspace_id || null;
-
-    const auth = makeAuthResponse(user, workspaceId);
-    await pool.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-      [user.id, auth.refreshToken]
-    );
-    res.json(auth);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/change-password", requireAuth, validate(changePasswordSchema), async (req, res, next) => {
-  try {
-    const { email, newPassword } = req.validated.body;
-    const tokenEmail = String(req.user.email || "")
-      .trim()
-      .toLowerCase();
-    if (tokenEmail !== email) {
-      return res.status(403).json({ error: "Email must match your signed-in account" });
-    }
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.user.userId]);
-    await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [req.user.userId]);
-    res.status(204).send();
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/refresh", async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (!refreshToken) return res.status(400).json({ error: "refreshToken is required" });
-  try {
-    const decoded = jwt.verify(refreshToken, env.jwtRefreshSecret);
-    const tokenResult = await pool.query(
-      `SELECT 1 FROM refresh_tokens
-       WHERE token = $1 AND user_id = $2 AND expires_at > NOW()`,
-      [refreshToken, decoded.userId]
-    );
-    if (!tokenResult.rowCount) return res.status(401).json({ error: "Refresh token invalid" });
-
-    const accessToken = signAccessToken({ userId: decoded.userId, email: decoded.email });
-    return res.json({ accessToken });
-  } catch {
-    return res.status(401).json({ error: "Refresh token invalid" });
-  }
-});
-
-router.post("/logout", async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (refreshToken) {
-    await pool.query(`DELETE FROM refresh_tokens WHERE token = $1`, [refreshToken]);
-  }
-  res.status(204).send();
-});
+// Login, logout, session refresh, and password changes are handled entirely by the Firebase
+// client SDK (signInWithEmailAndPassword / signOut / automatic token refresh / updatePassword).
+// The backend no longer issues or refreshes tokens. Teacher-initiated student password resets
+// remain server-side via the Admin SDK — see POST /workspaces/:workspaceId/users/:userId/reset-password.
 
 router.get("/me", requireAuth, async (req, res) => {
   const userResult = await pool.query(
@@ -487,18 +421,22 @@ router.post(
     const { newPassword } = req.validated.body;
 
     const student = await pool.query(
-      `SELECT wm.user_id
+      `SELECT u.firebase_uid
        FROM workspace_memberships wm
+       JOIN users u ON u.id = wm.user_id
        WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role = 'student'`,
       [workspaceId, userId]
     );
     if (!student.rowCount) {
       return res.status(404).json({ error: "Student not found in this workspace" });
     }
+    const firebaseUid = student.rows[0].firebase_uid;
+    if (!firebaseUid) {
+      return res.status(409).json({ error: "Student has no Firebase account" });
+    }
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, userId]);
-    await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+    // Reset the password in Firebase; existing sessions stay valid until their ID token expires.
+    await firebaseAuth().updateUser(firebaseUid, { password: newPassword });
     res.status(204).send();
   }
 );

@@ -1,26 +1,33 @@
-import { apiRequest, setStoredAuth, getStoredAuth } from "./http";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  updatePassword,
+} from "firebase/auth";
+import { auth } from "../firebase";
+import { apiRequest } from "./http";
 
 export async function login(email, password) {
   const normalizedEmail = String(email || "")
     .trim()
     .toLowerCase();
-  const data = await apiRequest("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email: normalizedEmail, password }),
-  });
-  setStoredAuth(data);
-  return data;
+  // Firebase verifies the credentials and starts the session; subsequent apiRequest calls
+  // (e.g. getMe) attach the resulting ID token automatically.
+  await signInWithEmailAndPassword(auth, normalizedEmail, password);
+  return null;
 }
 
-/** Requires Bearer token; email must match signed-in user. Invalidates refresh tokens. */
+/** Changes the signed-in user's own Firebase password. `email` is a confirmation field. */
 export async function changePassword(email, newPassword) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("You must be signed in to change your password.");
   const normalizedEmail = String(email || "")
     .trim()
     .toLowerCase();
-  return apiRequest("/auth/change-password", {
-    method: "POST",
-    body: JSON.stringify({ email: normalizedEmail, newPassword }),
-  });
+  if (user.email && normalizedEmail && user.email.toLowerCase() !== normalizedEmail) {
+    throw new Error("Email must match your signed-in account");
+  }
+  await updatePassword(user, newPassword);
 }
 
 export async function register({
@@ -40,25 +47,35 @@ export async function register({
   const normalizedEmail = String(email || "")
     .trim()
     .toLowerCase();
-  const data = await apiRequest("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({
-      email: normalizedEmail,
-      password,
-      fullName,
-      workspaceName: workspaceName || "Default Workspace",
-      role: role || "student",
-      schoolCode: schoolCode || "",
-      instructor: instructor || "",
-      period: period || "",
-      groupCode: groupCode || "",
-      studentCode: studentCode || "",
-      joinWorkspaceId,
-      joinCode: joinCode || undefined,
-    }),
-  });
-  setStoredAuth(data);
-  return data;
+  // Create the Firebase identity first, then provision the app account (workspace/profile/role).
+  const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+  try {
+    return await apiRequest("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        email: normalizedEmail,
+        fullName,
+        workspaceName: workspaceName || "Default Workspace",
+        role: role || "student",
+        schoolCode: schoolCode || "",
+        instructor: instructor || "",
+        period: period || "",
+        groupCode: groupCode || "",
+        studentCode: studentCode || "",
+        joinWorkspaceId,
+        joinCode: joinCode || undefined,
+      }),
+    });
+  } catch (err) {
+    // Backend provisioning failed (e.g. invalid join code) — remove the orphaned Firebase
+    // account so the email is free and the user can retry cleanly.
+    try {
+      await cred.user.delete();
+    } catch {
+      // If cleanup fails, surface the original error; the account can be reused on next sign-in.
+    }
+    throw err;
+  }
 }
 
 export async function getMe() {
@@ -136,16 +153,6 @@ export async function removeStudent(workspaceId, userId) {
 }
 
 export async function logout() {
-  const auth = getStoredAuth();
-  try {
-    if (auth?.refreshToken) {
-      await apiRequest("/auth/logout", {
-        method: "POST",
-        body: JSON.stringify({ refreshToken: auth.refreshToken }),
-      });
-    }
-  } finally {
-    // Always clear local session, even when backend logout is unreachable.
-    setStoredAuth(null);
-  }
+  // Firebase clears the persisted session and stops refreshing the ID token.
+  await signOut(auth);
 }

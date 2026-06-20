@@ -194,13 +194,13 @@ async function run() {
     // --- Join codes ---
     await pool.query(`DELETE FROM join_codes WHERE workspace_id = $1`, [workspaceId]);
     await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-       VALUES ($1, $2, 'P3RVK', $3, $4, true)`,
+      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+       VALUES ($1, $2, 'P3RVK', $3, $4, 'P3', true)`,
       [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
     );
     await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-       VALUES ($1, $2, 'P5RVM', $3, $4, false)`,
+      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+       VALUES ($1, $2, 'P5RVM', $3, $4, 'P5', false)`,
       [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
     );
 

@@ -97,50 +97,28 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
     let workspaceId = joinWorkspaceId;
     let profileSchoolCode = schoolCode || "";
     let profileInstructor = instructor || "";
+    // The student's period comes from the join code; their group is assigned later by the teacher.
+    let profilePeriod = role === "student" ? "" : (period || "");
     if (!workspaceId && role === "student") {
       if (!joinCode) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Student signup requires a teacher join code." });
       }
-      if (joinCode) {
-        const codeResult = await client.query(
-          `SELECT workspace_id, school_code, instructor
-           FROM join_codes
-           WHERE UPPER(code) = UPPER($1) AND active = TRUE
-           LIMIT 1`,
-          [joinCode.trim()]
-        );
-        if (!codeResult.rowCount) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Invalid or inactive join code" });
-        }
-        workspaceId = codeResult.rows[0].workspace_id;
-        profileSchoolCode = codeResult.rows[0].school_code || profileSchoolCode;
-        profileInstructor = codeResult.rows[0].instructor || profileInstructor;
-      } else {
-        const existingWorkspace = await client.query(
-          `SELECT id FROM workspaces WHERE name = $1 ORDER BY created_at ASC LIMIT 1`,
-          [workspaceName]
-        );
-        if (existingWorkspace.rowCount) {
-          workspaceId = existingWorkspace.rows[0].id;
-        }
-      }
-    }
-    let structure = buildStructure(1, 4);
-    if (workspaceId) {
-      structure = await getWorkspaceStructure(workspaceId);
-    }
-    if (role === "student") {
-      if (!structure.periods.includes(period)) {
+      const codeResult = await client.query(
+        `SELECT workspace_id, school_code, instructor, period
+         FROM join_codes
+         WHERE UPPER(code) = UPPER($1) AND active = TRUE
+         LIMIT 1`,
+        [joinCode.trim()]
+      );
+      if (!codeResult.rowCount) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Invalid period for this class setup." });
+        return res.status(400).json({ error: "Invalid or inactive join code" });
       }
-      const groups = structure.groupsByPeriod[period] || [];
-      if (!groups.includes(groupCode)) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Invalid group for selected period." });
-      }
+      workspaceId = codeResult.rows[0].workspace_id;
+      profileSchoolCode = codeResult.rows[0].school_code || profileSchoolCode;
+      profileInstructor = codeResult.rows[0].instructor || profileInstructor;
+      profilePeriod = codeResult.rows[0].period || "";
     }
     if (!workspaceId) {
       const wsResult = await client.query(
@@ -152,12 +130,9 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       workspaceId = wsResult.rows[0].id;
     }
 
-    // Join-code and normal student signup must stay "student". Only the workspace creator
-    // (teacher registration) becomes owner. joinWorkspaceId is for explicit invite flows.
-    const membershipRole =
-      role === "student"
-        ? "student"
-        : "teacher";
+    // Two roles only: students stay "student"; everyone else is "teacher" (whether they create
+    // a new workspace or join an existing one via joinWorkspaceId).
+    const membershipRole = role === "student" ? "student" : "teacher";
 
     await client.query(
       `INSERT INTO workspace_memberships (workspace_id, user_id, role)
@@ -174,8 +149,8 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
         workspaceId,
         profileSchoolCode,
         profileInstructor,
-        period || "",
-        groupCode || "",
+        profilePeriod,
+        role === "student" ? "" : (groupCode || ""),
         studentCode || "",
       ]
     );
@@ -262,7 +237,7 @@ router.get(
   async (req, res) => {
     const { code } = req.params;
     const result = await pool.query(
-      `SELECT workspace_id, school_code, instructor
+      `SELECT workspace_id, school_code, instructor, period
        FROM join_codes
        WHERE UPPER(code) = UPPER($1) AND active = TRUE
        LIMIT 1`,
@@ -271,10 +246,13 @@ router.get(
     if (!result.rowCount) return res.status(404).json({ error: "Invalid or inactive join code" });
     const workspaceId = result.rows[0].workspace_id;
     const structure = await getWorkspaceStructure(workspaceId);
+    // The code fixes the student's period; the teacher assigns their group later. The student
+    // doesn't pick a period or group at signup, so `period` is returned only for display/confirmation.
     res.json({
       workspaceId,
       schoolCode: result.rows[0].school_code || "",
       instructor: result.rows[0].instructor || "",
+      period: result.rows[0].period || "",
       ...structure,
     });
   }
@@ -317,7 +295,7 @@ router.get(
   async (req, res) => {
     const { workspaceId } = req.params;
     const result = await pool.query(
-      `SELECT id, code, school_code, instructor, active, created_at
+      `SELECT id, code, school_code, instructor, period, active, created_at
        FROM join_codes
        WHERE workspace_id = $1
        ORDER BY created_at DESC`,
@@ -370,12 +348,12 @@ router.post(
   async (req, res, next) => {
     try {
       const { workspaceId } = req.params;
-      const { code, schoolCode, instructor, active } = req.validated.body;
+      const { code, schoolCode, instructor, period, active } = req.validated.body;
       const created = await pool.query(
-        `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-         VALUES ($1, $2, UPPER($3), $4, $5, $6)
-         RETURNING id, code, school_code, instructor, active, created_at`,
-        [workspaceId, req.user.userId, code.trim(), schoolCode || "", instructor || "", active]
+        `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+         VALUES ($1, $2, UPPER($3), $4, $5, $6, $7)
+         RETURNING id, code, school_code, instructor, period, active, created_at`,
+        [workspaceId, req.user.userId, code.trim(), schoolCode || "", instructor || "", period || "", active]
       );
       res.status(201).json({ joinCode: created.rows[0] });
     } catch (error) {
@@ -399,7 +377,7 @@ router.patch(
       `UPDATE join_codes
        SET active = $1
        WHERE id = $2 AND workspace_id = $3
-       RETURNING id, code, school_code, instructor, active, created_at`,
+       RETURNING id, code, school_code, instructor, period, active, created_at`,
       [active, codeId, workspaceId]
     );
     if (!result.rowCount) return res.status(404).json({ error: "Join code not found" });

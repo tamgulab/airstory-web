@@ -35,6 +35,7 @@ export const createJoinCodeSchema = z.object({
     code: z.string().trim().toUpperCase().regex(joinCodePattern, "Code must be 5 letters/numbers."),
     schoolCode: z.string().optional().default(""),
     instructor: z.string().optional().default(""),
+    period: z.string().optional().default(""),
     active: z.boolean().optional().default(true),
   }),
   params: z.object({

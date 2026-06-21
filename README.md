@@ -1,26 +1,20 @@
 # AIRSTORY
 
-Air quality classroom platform: React dashboard + Express/Postgres API.
+Air quality classroom platform: React dashboard + Express/Postgres API. Authentication is handled by **Firebase**.
 
 | Folder | Purpose |
 |--------|---------|
-| `src/` | **Main app** — student/teacher login, heat map, raw data, analysis, My Page |
+| `src/` | **Main app** — login, heat map, raw data, analysis, My Page, Manage Classes |
 | `backend/` | Node API (auth, sessions, measurements, analytics) |
-| `docs/` | Deploy guides (`DEPLOY_RENDER.md`, `VERCEL.md`, **`GITHUB_PAGES.md`**), mobile API docs |
-| `air-quality-tracker/` | **Legacy** smaller CRA app — **do not use** for production builds; CI builds from **repo root** only |
-| `keepsake/integrated-frontend-snapshot/` | Frozen copy of `src/` + configs (restore / diff reference) |
-| `keepsake-pre-backend/` | Older UI snapshot before backend work |
+| `docs/` | API reference (`openapi.yaml`) and deploy guides (`DEPLOY_RENDER.md`, `VERCEL.md`, `GITHUB_PAGES.md`) |
 
-**Frontend (canonical): GitHub Pages** — the live site must be built from **this repo root** (`npm run build`), not from `air-quality-tracker/`.
+## Authentication & roles
 
-- **CI:** push to `main` runs [.github/workflows/deploy-gh-pages.yml](.github/workflows/deploy-gh-pages.yml) (see **[docs/GITHUB_PAGES.md](docs/GITHUB_PAGES.md)** for secrets + troubleshooting).
-- **Manual:** `npm run deploy` uses `scripts/deploy-github-pages.sh` and **`CACHE_DIR`** outside the repo. Before deploy, set in `.env` (baked into the static build): `REACT_APP_API_BASE_URL`, and **`REACT_APP_GOOGLE_MAPS_API_KEY`** for the heat map. CI needs the same vars as **Actions secrets** (see [docs/GITHUB_PAGES.md](docs/GITHUB_PAGES.md)).
-
-GitHub: **Settings → Pages** — source **GitHub Actions** so the workflow in `.github/workflows/deploy-gh-pages.yml` can publish (artifact + deploy-pages). For branch-only deploys, use **`npm run deploy`** instead (see [docs/GITHUB_PAGES.md](docs/GITHUB_PAGES.md)).
-
-**Vercel:** not required if you only use Pages. If `git push` still triggers Vercel builds, disconnect the project in Vercel (see **`docs/VERCEL.md` → “GitHub Pages만 쓸 때”**).
-
-**Render:** `render.yaml` Blueprint — API + Postgres. See `docs/DEPLOY_RENDER.md`.
+- Sign-in is done by the **Firebase client SDK** (email/password or **Continue with Google**); the backend verifies the Firebase ID token and provisions the matching app account.
+- There are **two roles: `teacher` and `student`.**
+  - **Teacher** — creates a workspace, manages classes, and generates join codes. Each join code is tied to a **class period**.
+  - **Student** — signs up with a teacher's join code. The code assigns their **period** automatically; the **teacher assigns their group** afterward in Manage Classes.
+- **First-time Google users** land on a short onboarding screen to confirm their name and pick a role (students also enter a join code).
 
 ## Local Development
 
@@ -28,70 +22,83 @@ GitHub: **Settings → Pages** — source **GitHub Actions** so the workflow in 
 
 - Node.js
 - Docker (for the database)
+- A **Firebase project** (for authentication — see below)
 
-### 1. Start the database
+### 1. Firebase setup (required for login)
+
+In the [Firebase console](https://console.firebase.google.com/):
+
+1. **Authentication → Sign-in method:** enable **Email/Password** and **Google**.
+2. **Project settings → Your apps → Web app:** copy the web config — these are the frontend `REACT_APP_FIREBASE_*` values (step 4).
+3. **Project settings → Service accounts → Generate new private key:** download the JSON — these are the backend `FIREBASE_*` values (step 3).
+
+### 2. Start the database
 
 ```bash
 docker compose up -d
 ```
 
-This starts a PostgreSQL 16 container using the settings in `docker-compose.yml` (`air_sensor` database, user `postgres`, password `postgres`).
+Starts PostgreSQL 16 from `docker-compose.yml` (`air_sensor` database, user/password `postgres`).
 
-### 2. Set up the backend
+### 3. Set up the backend
 
 ```bash
 cd backend
 cp .env.example .env
 ```
 
-Edit `.env` and set the two JWT secrets to any long random strings:
+In `.env`, set `DATABASE_URL` (the default matches `docker compose`) and the three Firebase Admin values from the service-account key:
 
 ```
-JWT_ACCESS_SECRET=<any-long-random-string>
-JWT_REFRESH_SECRET=<any-other-long-random-string>
+FIREBASE_PROJECT_ID=...
+FIREBASE_CLIENT_EMAIL=...
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
-Then install dependencies, run migrations, and seed the database:
+Then install, migrate, seed, and run:
 
 ```bash
 npm install
 npm run db:migrate   # create tables
 npm run db:seed      # seed Lincoln workspace: teacher, 10 students, 14 sessions
-```
-
-Start the backend:
-
-```bash
 npm run dev          # runs on http://localhost:4000
 ```
 
-### 3. Start the frontend
+### 4. Start the frontend
 
 In the repo root:
 
 ```bash
+cp .env.example .env   # fill in the REACT_APP_FIREBASE_* web config
 npm install
-npm start            # runs on http://localhost:3000
+npm start              # runs on http://localhost:3000
 ```
 
-No `.env` file is needed for local dev — the frontend automatically points to `http://localhost:4000/api` when running on localhost. A `REACT_APP_GOOGLE_MAPS_API_KEY` is only required for the heat map view.
+The frontend automatically points at `http://localhost:4000/api` on localhost — leave `REACT_APP_API_BASE_URL` blank for local dev. `REACT_APP_GOOGLE_MAPS_API_KEY` is only needed for the heat-map view.
 
-### 4. Log in
+### 5. Log in
 
 | Role | Email | Password |
 |---|---|---|
 | Teacher | `rivera@lincoln.mock` | `rivera2026` |
 | Student (any) | `ava.martinez@lincoln.mock` | `lincoln2026` |
 
-The seed creates 14 sessions with full per-second measurements. Open Manage Classes to inspect join codes and the student roster.
+> Seeded accounts use Firebase email/password (created by `db:seed` via the Admin SDK). Open **Manage Classes** to inspect join codes and the student roster. To try Google sign-in, use any Google account — you'll be sent through onboarding.
 
 ### Useful commands
 
 | Command | Description |
 |---|---|
 | `docker compose up -d` | Start the database |
-| `docker compose stop` | Stop the database |
-| `docker compose down` | Stop the database (Switching branches/Done with project)|
-| `docker compose down -v` | Fresh database
+| `docker compose down` | Stop the database |
+| `docker compose down -v` | Drop the database (fresh start — re-run `db:migrate` + `db:seed`) |
 | `npm run db:migrate` | Apply schema migrations |
-| `npm run db:seed` | Reset Lincoln workspace (teacher + students + sessions + measurements) |
+| `npm run db:seed` | Reset the Lincoln workspace (teacher + students + sessions + measurements) |
+
+## Deployment
+
+- **Render** (`render.yaml` Blueprint — API + Postgres): `docs/DEPLOY_RENDER.md`
+- **GitHub Pages** (frontend, via `.github/workflows/deploy-gh-pages.yml` or `npm run deploy`): `docs/GITHUB_PAGES.md`
+- **Vercel** (optional): `docs/VERCEL.md`
+
+For static builds, the `REACT_APP_*` values (API base, Firebase config, Maps key) are baked in at build time and must be provided as environment variables / Actions secrets.

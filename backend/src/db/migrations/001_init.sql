@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS workspace_memberships (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'teacher', 'student')),
+  role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
   UNIQUE(workspace_id, user_id)
 );
 

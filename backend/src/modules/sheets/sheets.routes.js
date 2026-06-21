@@ -21,7 +21,7 @@ async function buildSheetsClient() {
 
 router.post(
   "/workspaces/:workspaceId/sheets/export",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   async (req, res, next) => {
     try {
       const { workspaceId } = req.params;

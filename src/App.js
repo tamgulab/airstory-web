@@ -1,19 +1,23 @@
 import React, { useCallback, useEffect, useState, useRef } from "react";
 import LandingPage from "./components/LandingPage";
+import OnboardingForm from "./components/OnboardingForm";
 import HeatMapDashboard from "./components/HeatMapDashboard";
 import RawDataView from "./components/RawDataView";
 import AnalysisView from "./components/AnalysisView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
 import { MapPin, Table, BarChart3, User, LogOut, Users } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "./firebase";
 import {
   login as loginApi,
   register as registerApi,
+  loginWithGoogle as loginWithGoogleApi,
+  completeRegistration as completeRegistrationApi,
   getMe,
   logout as logoutApi,
   getClassStructure,
 } from "./api/auth";
-import { getStoredAuth } from "./api/http";
 import { getMeasurements } from "./api/data";
 import {
   setImportedMeasurements,
@@ -77,15 +81,14 @@ const METRIC_THEMES = {
 
 
 export default function App() {
-  const storedAuth = getStoredAuth();
-  const [isLoggedIn, setIsLoggedIn] = useState(Boolean(storedAuth?.accessToken));
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [activeSection, setActiveSection] = useState("heatmap");
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
-  const [workspaceId, setWorkspaceId] = useState(storedAuth?.user?.workspaceId || "");
+  const [workspaceId, setWorkspaceId] = useState("");
   const [userRole, setUserRole] = useState("student");
   const [viewerProfile, setViewerProfile] = useState({
-    displayName: storedAuth?.user?.fullName || "",
+    displayName: "",
     school: "",
     instructor: "",
     period: "",
@@ -94,6 +97,10 @@ export default function App() {
   });
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  // First-time federated (e.g. Google) sign-in: signed in to Firebase but no app account yet.
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
+  const [onboardingError, setOnboardingError] = useState("");
   const [importedDataVersion, setImportedDataVersion] = useState(0);
   /** Server profile placement snapshot; only when this changes do we overwrite student explorer filters (CSV / drill-down). */
   const lastProfileHierarchySnapRef = useRef("");
@@ -127,14 +134,28 @@ export default function App() {
     refreshClassStructure();
   }, [refreshClassStructure]);
 
+  // Restore (and track) the Firebase session. Fires on mount with the persisted user, if any,
+  // and on every sign-in/sign-out. syncFromMe (gated on isLoggedIn) then hydrates the app profile.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setIsLoggedIn(Boolean(user));
+    });
+    return unsubscribe;
+  }, []);
+
   const syncFromMe = useCallback(async () => {
     if (!isLoggedIn) return;
     try {
       const me = await getMe();
+      // The user has an app account, so they're past onboarding.
+      setNeedsOnboarding(false);
       const membership = me?.memberships?.[0] || null;
       const profile = me?.profile || null;
       const nextRole = membership?.role || userRole || "student";
-      const isTeacherRole = nextRole === "teacher" || nextRole === "owner";
+      const isTeacherRole = nextRole === "teacher";
+      // On a fresh page load there is no persisted workspace id (Firebase only restores identity),
+      // so hydrate it here from the membership returned by the backend.
+      if (membership?.workspace_id) setWorkspaceId(membership.workspace_id);
       setUserRole(nextRole);
       setViewerProfile((prev) => ({
         ...prev,
@@ -192,8 +213,12 @@ export default function App() {
           /* leave previous structure */
         }
       }
-    } catch {
-      // keep current session state when me endpoint is temporarily unavailable
+    } catch (e) {
+      // A "no account" 401 means this Firebase user hasn't finished registration -> onboarding.
+      // Any other error (e.g. transient network) leaves the current session state untouched.
+      if (String(e?.message || "").toLowerCase().includes("no account")) {
+        setNeedsOnboarding(true);
+      }
     }
   }, [isLoggedIn, userRole]);
 
@@ -287,7 +312,7 @@ export default function App() {
         studentId: profile?.student_code || email.split("@")[0].toUpperCase(),
       });
       setIsLoggedIn(true);
-      setActiveSection((membership?.role === "teacher" || membership?.role === "owner") ? "manageclasses" : "heatmap");
+      setActiveSection((membership?.role === "teacher") ? "manageclasses" : "heatmap");
       const school = profile?.school_code ?? "";
       const instructor = profile?.instructor ?? "";
       const period = profile?.period ?? "";
@@ -308,14 +333,59 @@ export default function App() {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      await loginWithGoogleApi();
+      // onAuthStateChanged flips isLoggedIn; syncFromMe then either hydrates an existing
+      // account or sets needsOnboarding for a first-time user.
+    } catch (error) {
+      setAuthError(error.message || "Google sign-in failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // First-time federated users finish here: confirm name + role (+ join code for students).
+  const handleCompleteOnboarding = async ({ fullName, role, joinCode }) => {
+    setOnboardingError("");
+    setOnboardingSubmitting(true);
+    try {
+      const cu = auth.currentUser;
+      const email = cu?.email || "";
+      await completeRegistrationApi({
+        email,
+        fullName,
+        role,
+        workspaceName: role === "teacher" ? `${fullName} Workspace` : "Air Story class",
+        studentCode: role === "student" && email ? email.split("@")[0].toUpperCase() : "",
+        joinCode: role === "student" ? joinCode : undefined,
+      });
+      setNeedsOnboarding(false);
+      await syncFromMe();
+      setActiveSection(role === "teacher" ? "manageclasses" : "heatmap");
+    } catch (error) {
+      setOnboardingError(error.message || "Could not finish setting up your account.");
+    } finally {
+      setOnboardingSubmitting(false);
+    }
+  };
+
+  const handleCancelOnboarding = async () => {
+    setNeedsOnboarding(false);
+    setOnboardingError("");
+    await handleLogout();
+  };
+
   const handleRegister = async ({ email, password, fullName, mode, period, group, instructor, joinCode }) => {
     setAuthError("");
     setAuthLoading(true);
     try {
-      const auth = getStoredAuth();
       // Students always join via join code only; never reuse a stale workspace id from
-      // another session or the API may treat the signup inconsistently.
-      const joinWorkspaceId = mode === "teacher" ? auth?.user?.workspaceId || undefined : undefined;
+      // another session or the API may treat the signup inconsistently. A teacher creating
+      // another account from an active session reuses the current workspace.
+      const joinWorkspaceId = mode === "teacher" ? workspaceId || undefined : undefined;
       const session = await registerApi({
         email,
         password,
@@ -349,7 +419,7 @@ export default function App() {
         studentId: profile?.student_code || email.split("@")[0].toUpperCase(),
       });
       setIsLoggedIn(true);
-      setActiveSection((membership?.role === "teacher" || membership?.role === "owner") ? "manageclasses" : "heatmap");
+      setActiveSection((membership?.role === "teacher") ? "manageclasses" : "heatmap");
       const rs = profile?.school_code ?? "";
       const ri = profile?.instructor ?? "";
       const rp = profile?.period ?? "";
@@ -404,7 +474,7 @@ export default function App() {
     setActiveSection("rawdata");
   };
 
-  const isTeacher = userRole === "teacher" || userRole === "owner";
+  const isTeacher = userRole === "teacher";
 
   const teacherNavInitials = () => {
     const name = (viewerProfile.displayName || "").trim();
@@ -449,9 +519,36 @@ export default function App() {
           <LandingPage
             onLogin={handleLogin}
             onRegister={handleRegister}
+            onGoogleLogin={handleGoogleLogin}
             filters={filters}
             authError={authError}
             authLoading={authLoading}
+          />
+        </main>
+        <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">
+          <p>Air Story • TAMGU LAB @TC</p>
+        </footer>
+      </div>
+    );
+  }
+
+  if (needsOnboarding) {
+    return (
+      <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100"
+           style={{
+             backgroundImage: `radial-gradient(#cbd5e1 1px, transparent 1px)`,
+             backgroundSize: '24px 24px'
+           }}
+      >
+        <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600 sticky top-0 z-50" />
+        <main className="min-h-screen flex flex-col justify-center py-12 px-4">
+          <OnboardingForm
+            defaultName={auth.currentUser?.displayName || ""}
+            email={auth.currentUser?.email || ""}
+            onSubmit={handleCompleteOnboarding}
+            onCancel={handleCancelOnboarding}
+            submitting={onboardingSubmitting}
+            error={onboardingError}
           />
         </main>
         <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">

@@ -1,25 +1,40 @@
-import jwt from "jsonwebtoken";
-import { env } from "../config/env.js";
 import { pool } from "../db/pool.js";
+import { firebaseAuth } from "../config/firebase-admin.js";
 
-export function signAccessToken(payload) {
-  return jwt.sign(payload, env.jwtAccessSecret, { expiresIn: env.jwtAccessExpires });
-}
-
-export function signRefreshToken(payload) {
-  return jwt.sign(payload, env.jwtRefreshSecret, { expiresIn: env.jwtRefreshExpires });
-}
-
-export function requireAuth(req, res, next) {
+/**
+ * Authenticate via a Firebase ID token (Authorization: Bearer <idToken>).
+ * Verifies the token with Firebase Admin, then resolves it to the app user row by firebase_uid.
+ * Sets req.user = { userId, email, firebaseUid } so downstream code keeps using the internal UUID.
+ */
+export async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Missing auth token" });
 
+  let decoded;
   try {
-    req.user = jwt.verify(token, env.jwtAccessSecret);
-    return next();
+    decoded = await firebaseAuth().verifyIdToken(token);
   } catch {
     return res.status(401).json({ error: "Invalid token" });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, email FROM users WHERE firebase_uid = $1`,
+      [decoded.uid]
+    );
+    if (!result.rowCount) {
+      // Authenticated with Firebase, but no app account exists yet — they must finish /auth/register.
+      return res.status(401).json({ error: "No account for this user. Complete registration." });
+    }
+    req.user = {
+      userId: result.rows[0].id,
+      email: result.rows[0].email,
+      firebaseUid: decoded.uid,
+    };
+    return next();
+  } catch (error) {
+    return next(error);
   }
 }
 

@@ -14,7 +14,7 @@ const MyPage = ({
   classStructure,
   onProfileSaved,
 }) => {
-  const isTeacherRole = userRole === 'teacher' || userRole === 'owner';
+  const isTeacherRole = userRole === 'teacher';
   const [isEditing, setIsEditing] = useState(false);
   const [tempFilters, setTempFilters] = useState({ ...filters });
   const [groupMembers, setGroupMembers] = useState([]);
@@ -45,7 +45,7 @@ const MyPage = ({
         if (cancelled) return;
         setMe(meData);
         const members = rosterData.members || [];
-        const teacher = members.find((m) => m.role === 'teacher' || m.role === 'owner');
+        const teacher = members.find((m) => m.role === 'teacher');
         const students = members.filter((m) => m.role === 'student');
         if (teacher) {
           setInstructor({
@@ -240,9 +240,9 @@ const MyPage = ({
 
           <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200 mt-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-3">
-              {userRole === 'teacher' || userRole === 'owner' ? 'Teacher Guide' : 'Student Guide'}
+              {userRole === 'teacher' ? 'Teacher Guide' : 'Student Guide'}
             </h3>
-            {(userRole === 'teacher' || userRole === 'owner') ? (
+            {(userRole === 'teacher') ? (
               <ul className="text-sm text-gray-700 space-y-2">
                 <li>Start in Manage Classes to confirm period/group structure.</li>
                 <li>Use HeatMap for class-level overview, then Raw Data for detailed validation.</li>
@@ -324,7 +324,7 @@ const MyPage = ({
                 <User className="w-5 h-5 text-white" />
               </div>
               <h3 className="text-xl font-bold text-gray-900">
-                {(userRole === 'teacher' || userRole === 'owner') ? 'Class Members' : 'Group Members'}
+                {(userRole === 'teacher') ? 'Class Members' : 'Group Members'}
               </h3>
             </div>
 

@@ -4,7 +4,9 @@ info:
   version: 1.0.0
   description: >
     REST API for the Airstory web app.
-    All protected endpoints require a JWT Bearer token obtained via /auth/login or /auth/register.
+    Firebase is the identity provider. Protected endpoints require a Firebase ID token as a
+    Bearer credential; sign-in, token refresh, sign-out, and password changes happen client-side
+    via the Firebase SDK. See docs/openapi.yaml (this file) for the full contract.
 
 servers:
   - url: http://localhost:4000/api
@@ -20,16 +22,15 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: Firebase ID token
+      description: >
+        Firebase ID token from the client SDK. The backend verifies it with Firebase Admin
+        and maps the Firebase uid to the app user via users.firebase_uid.
 
   schemas:
-    AuthTokens:
+    AuthUser:
       type: object
       properties:
-        accessToken:
-          type: string
-        refreshToken:
-          type: string
         user:
           type: object
           properties:
@@ -75,6 +76,10 @@ components:
           type: string
         instructor:
           type: string
+        period:
+          type: string
+          description: Class period this code enrolls students into (assigned automatically on signup)
+          example: P3
         active:
           type: boolean
         created_at:
@@ -116,7 +121,7 @@ components:
           format: email
         role:
           type: string
-          enum: [owner, teacher, student]
+          enum: [teacher, student]
         school_code:
           type: string
         instructor:
@@ -343,22 +348,23 @@ paths:
   /auth/register:
     post:
       tags: [Auth]
-      summary: Register a new user
-      security: []
+      summary: Provision the app account for a Firebase-authenticated user
+      description: >
+        The Firebase account is created on the client first; this endpoint provisions the
+        matching app account (workspace, membership, profile) and links it via firebase_uid
+        from the verified token. Identity email comes from the token.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email, password, fullName]
+              required: [fullName]
               properties:
                 email:
                   type: string
                   format: email
-                password:
-                  type: string
-                  minLength: 8
+                  description: Optional fallback; used only if the Firebase token has no email
                 fullName:
                   type: string
                   minLength: 2
@@ -379,15 +385,17 @@ paths:
                 period:
                   type: string
                   maxLength: 16
+                  description: Ignored for students — a student's period is taken from the join code
                 groupCode:
                   type: string
                   maxLength: 16
+                  description: Ignored for students — the teacher assigns a student's group later
                 studentCode:
                   type: string
                 joinWorkspaceId:
                   type: string
                   format: uuid
-                  description: UUID of the workspace to join (required for students)
+                  description: UUID of an existing workspace to join (teacher invite flow)
                 joinCode:
                   type: string
                   minLength: 5
@@ -395,158 +403,25 @@ paths:
                   description: 5-character alphanumeric join code (required for students)
       responses:
         '201':
-          description: User created
+          description: App account provisioned
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthTokens'
+                $ref: '#/components/schemas/AuthUser'
         '400':
-          description: Validation error (e.g. student requires join code, invalid period/group)
+          description: Validation error (e.g. student signup requires a valid, active join code)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid Firebase ID token
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Email already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /auth/login:
-    post:
-      tags: [Auth]
-      summary: Log in with email and password
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email:
-                  type: string
-                  format: email
-                password:
-                  type: string
-      responses:
-        '200':
-          description: Login successful
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthTokens'
-        '401':
-          description: Invalid credentials
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /auth/phg-session:
-    post:
-      tags: [Auth]
-      summary: Open a passwordless PHG shared student session
-      description: >
-        Issues a JWT for the shared `phg-students` backend account without
-        requiring credentials. Used by the PHG static site.
-      security: []
-      responses:
-        '200':
-          description: Session tokens for the shared PHG account
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthTokens'
-        '503':
-          description: PHG shared account not configured or has no workspace
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /auth/refresh:
-    post:
-      tags: [Auth]
-      summary: Refresh an access token
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [refreshToken]
-              properties:
-                refreshToken:
-                  type: string
-      responses:
-        '200':
-          description: New access token
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  accessToken:
-                    type: string
-        '400':
-          description: refreshToken is required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Refresh token invalid or expired
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /auth/logout:
-    post:
-      tags: [Auth]
-      summary: Log out and invalidate refresh token
-      security: []
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                refreshToken:
-                  type: string
-      responses:
-        '204':
-          description: Logged out successfully
-
-  /auth/change-password:
-    post:
-      tags: [Auth]
-      summary: Change the authenticated user's password
-      description: Invalidates all existing refresh tokens on success.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, newPassword]
-              properties:
-                email:
-                  type: string
-                  format: email
-                  description: Must match the signed-in user's email
-                newPassword:
-                  type: string
-                  minLength: 8
-      responses:
-        '204':
-          description: Password changed
-        '403':
-          description: Email does not match signed-in account
+          description: Email already exists, or this Firebase account is already registered
           content:
             application/json:
               schema:
@@ -585,7 +460,7 @@ paths:
                           format: uuid
                         role:
                           type: string
-                          enum: [owner, teacher, student]
+                          enum: [teacher, student]
                   profile:
                     $ref: '#/components/schemas/UserProfile'
 
@@ -657,6 +532,10 @@ paths:
                     type: string
                   instructor:
                     type: string
+                  period:
+                    type: string
+                    description: The period this code assigns the student to (the student does not choose it)
+                    example: P3
                   periods:
                     type: array
                     items:
@@ -713,7 +592,7 @@ paths:
     get:
       tags: [Auth]
       summary: List all join codes for a workspace
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -743,7 +622,7 @@ paths:
     post:
       tags: [Auth]
       summary: Create a join code for a workspace
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -770,6 +649,11 @@ paths:
                 instructor:
                   type: string
                   default: ''
+                period:
+                  type: string
+                  default: ''
+                  description: Class period students who use this code are enrolled into
+                  example: P3
                 active:
                   type: boolean
                   default: true
@@ -800,7 +684,7 @@ paths:
     patch:
       tags: [Auth]
       summary: Activate or deactivate a join code
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -869,7 +753,7 @@ paths:
     patch:
       tags: [Auth]
       summary: Update the period/group counts for a workspace
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -911,7 +795,9 @@ paths:
     post:
       tags: [Auth]
       summary: Reset a student's password (teacher action)
-      description: Requires owner or teacher role. Invalidates the student's refresh tokens.
+      description: >
+        Requires teacher role. Resets the student's password in Firebase via the
+        Admin SDK. Existing sessions stay valid until their ID token expires (~1 hour).
       parameters:
         - name: workspaceId
           in: path
@@ -951,12 +837,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '409':
+          description: Student has no Firebase account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/workspaces/{workspaceId}/users/{userId}/placement:
     patch:
       tags: [Auth]
       summary: Move a student to a different period/group
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1022,7 +914,7 @@ paths:
     delete:
       tags: [Auth]
       summary: Remove a student from a workspace
-      description: Requires owner or teacher role. Deletes the student's profile in this workspace.
+      description: Requires teacher role. Deletes the student's profile in this workspace.
       parameters:
         - name: workspaceId
           in: path
@@ -1081,7 +973,7 @@ paths:
     post:
       tags: [Sessions]
       summary: Create a new session
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1148,7 +1040,7 @@ paths:
     delete:
       tags: [Sessions]
       summary: Delete a session and all its measurements
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1246,7 +1138,7 @@ paths:
     post:
       tags: [Measurements]
       summary: Create a single measurement
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1308,7 +1200,7 @@ paths:
       summary: Delete all measurements, sessions, and edits in a workspace
       description: >
         Destructive — clears the entire workspace dataset.
-        Requires owner or teacher role.
+        Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1330,7 +1222,7 @@ paths:
     patch:
       tags: [Measurements]
       summary: Update sensor values on a measurement
-      description: Requires owner or teacher role.
+      description: Requires teacher role.
       parameters:
         - name: workspaceId
           in: path
@@ -1395,7 +1287,7 @@ paths:
     post:
       tags: [Measurements]
       summary: Record a corrected value for a measurement field
-      description: Available to all workspace roles (owner, teacher, student).
+      description: Available to all workspace roles (teacher, student).
       parameters:
         - name: workspaceId
           in: path
@@ -1761,7 +1653,7 @@ paths:
         Exports all sessions and up to 5000 measurements to the configured
         Google Sheet. Requires GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL,
         and GOOGLE_PRIVATE_KEY environment variables on the server.
-        Requires owner or teacher role.
+        Requires teacher role.
       parameters:
         - name: workspaceId
           in: path

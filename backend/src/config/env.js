@@ -27,10 +27,16 @@ export const env = {
   /** @deprecated use frontendOrigins / corsReflectOrigin for CORS */
   frontendUrl: configuredOrigins[0] || "http://localhost:3000",
   databaseUrl: process.env.DATABASE_URL || "",
-  jwtAccessSecret: process.env.JWT_ACCESS_SECRET || "dev-access-secret",
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || "dev-refresh-secret",
-  jwtAccessExpires: process.env.JWT_ACCESS_EXPIRES || "15m",
-  jwtRefreshExpires: process.env.JWT_REFRESH_EXPIRES || "30d",
+  /**
+   * Firebase Admin service-account credentials. Firebase is the identity provider:
+   * the backend verifies ID tokens and manages user passwords through the Admin SDK.
+   * FIREBASE_PRIVATE_KEY is stored with escaped newlines (\n) and unescaped here, same as GOOGLE_PRIVATE_KEY.
+   */
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+  },
   googleSheetId: process.env.GOOGLE_SHEET_ID || "",
   googleServiceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "",
   googlePrivateKey: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),

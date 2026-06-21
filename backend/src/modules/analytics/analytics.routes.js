@@ -11,7 +11,7 @@ router.use(requireAuth);
 
 router.get(
   "/workspaces/:workspaceId/analytics/summary",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const { metric = "pm25", from, to } = req.query;
@@ -47,7 +47,7 @@ router.get(
 
 router.get(
   "/workspaces/:workspaceId/heatmap",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const { metric = "pm25" } = req.query;
@@ -74,7 +74,7 @@ router.get(
 
 router.get(
   "/workspaces/:workspaceId/export/measurements.csv",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const result = await pool.query(

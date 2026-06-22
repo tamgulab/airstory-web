@@ -9,6 +9,16 @@ import {
 import { auth } from "../firebase";
 import { apiRequest } from "./http";
 
+/** Lightweight backend reachability probe. Unauthenticated (`/health`); returns false instead of throwing. */
+export async function checkHealth() {
+  try {
+    const res = await apiRequest("/health");
+    return Boolean(res?.ok);
+  } catch {
+    return false;
+  }
+}
+
 export async function login(email, password) {
   const normalizedEmail = String(email || "")
     .trim()

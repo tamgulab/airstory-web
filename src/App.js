@@ -17,6 +17,7 @@ import {
   getMe,
   logout as logoutApi,
   getClassStructure,
+  checkHealth,
 } from "./api/auth";
 import { getMeasurements } from "./api/data";
 import {
@@ -291,6 +292,12 @@ export default function App() {
     setAuthError("");
     setAuthLoading(true);
     try {
+      // Block sign-in entirely if the backend is unreachable, so we never enter the app shell
+      // without a working API (the landing page keeps showing authError).
+      const online = await checkHealth();
+      if (!online) {
+        throw new Error("Can't reach the server. Please check your connection and try again.");
+      }
       const session = await loginApi(email, password);
       let me = null;
       try {
@@ -337,6 +344,11 @@ export default function App() {
     setAuthError("");
     setAuthLoading(true);
     try {
+      // Block sign-in entirely if the backend is unreachable, before opening the Google popup.
+      const online = await checkHealth();
+      if (!online) {
+        throw new Error("Can't reach the server. Please check your connection and try again.");
+      }
       await loginWithGoogleApi();
       // onAuthStateChanged flips isLoggedIn; syncFromMe then either hydrates an existing
       // account or sets needsOnboarding for a first-time user.
@@ -382,6 +394,11 @@ export default function App() {
     setAuthError("");
     setAuthLoading(true);
     try {
+      // Block sign-up entirely if the backend is unreachable, before creating a Firebase identity.
+      const online = await checkHealth();
+      if (!online) {
+        throw new Error("Can't reach the server. Please check your connection and try again.");
+      }
       // Students always join via join code only; never reuse a stale workspace id from
       // another session or the API may treat the signup inconsistently. A teacher creating
       // another account from an active session reuses the current workspace.

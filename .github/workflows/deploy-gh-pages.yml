@@ -1,0 +1,79 @@
+name: Deploy GitHub Pages (Air Quality Tracker)
+
+# Build from repo root. Uses GitHub’s Pages artifact flow — requires:
+# Settings → Pages → Source = **GitHub Actions** (not “Deploy from branch”).
+# If you prefer updating only the `gh-pages` branch, use `npm run deploy` locally instead.
+on:
+  # IMPORTANT:
+  # This repo contains two GitHub Pages deploy workflows:
+  # - deploy-gh-pages.yml (root app in `src/`)
+  # - deploy-gh-pages-phg.yml (PHG variant in `phg/`)
+  #
+  # GitHub Pages serves ONE site per repo, so whichever workflow deploys last
+  # overwrites the site. We keep the PHG workflow as the default auto-deploy
+  # and disable this root workflow on push to prevent accidental overwrites.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Needed so secrets stored under Settings → Environments → github-pages are visible during `npm run build`.
+    # Repository-level Actions secrets also work here.
+    environment:
+      name: github-pages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify Google Maps key (CRA bakes this at build time)
+        env:
+          MAPS: ${{ secrets.REACT_APP_GOOGLE_MAPS_API_KEY }}
+        run: |
+          if [ -z "$MAPS" ]; then
+            echo "::error::REACT_APP_GOOGLE_MAPS_API_KEY is missing."
+            echo "Add it in THIS repo (e.g. airstory): Settings → Secrets and variables → Actions → New repository secret."
+            echo "Name must be exactly: REACT_APP_GOOGLE_MAPS_API_KEY"
+            echo "Or add the same name under Environments → github-pages (this job uses that environment)."
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL || 'https://air-sensor-api.onrender.com/api' }}
+          REACT_APP_GOOGLE_MAPS_API_KEY: ${{ secrets.REACT_APP_GOOGLE_MAPS_API_KEY }}
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

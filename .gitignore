@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables (never commit API keys — OPENAQ_API_KEY, DATABASE_URL, etc.)
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build outputs
+build/
+dist/
+*.tgz
+
+# Backend (same repo)
+backend/node_modules/
+backend/.env
+
+# Historical keepsake folders
+keepsake-pre-backend/**/node_modules/
+
+# Vercel
+.vercel/

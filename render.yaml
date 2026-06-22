@@ -19,7 +19,7 @@ services:
     buildCommand: npm install
     # start runs migrate + Sikich teacher upsert (idempotent), then the API — no manual Shell step.
     startCommand: npm start
-    healthCheckPath: /health
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production

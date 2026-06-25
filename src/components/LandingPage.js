@@ -42,7 +42,7 @@ const AIR_FACTS = [
   "Air quality sensors help communities spot local hotspots that citywide averages can miss.",
 ];
 
-const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) => {
+const LandingPage = ({ onLogin, onRegister, onGoogleLogin, filters, authError, authLoading }) => {
   const [mode, setMode] = useState('student');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -63,17 +63,11 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
     []
   );
 
-  // Update email when mode changes
-  const handleModeChange = (newMode) => {
+  // Sign-up role choice (login needs no role — it's read from the account on the server).
+  const handleRoleChange = (newMode) => {
     setFormError('');
     setSignupStep(1);
     setMode(newMode);
-    if (newMode === 'teacher') {
-      setEmail('sikich@tamgu.com');
-    } else {
-      setEmail('');
-    }
-    setPassword('');
   };
 
   const handleLoginAttempt = async () => {
@@ -85,12 +79,11 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
       setLoadingJoinConfig(true);
       try {
         const config = await getJoinCodeConfig(joinCode.trim().toUpperCase());
-        const periods = config.periods || ['P1'];
-        const groups = config.groupsByPeriod?.[periods[0]] || ['G1', 'G2', 'G3', 'G4'];
         setJoinConfig(config);
         setSignupInstructor(config.instructor || signupInstructor);
-        setSignupPeriod(periods[0]);
-        setSignupGroup(groups[0] || 'G1');
+        // The code fixes the period; the teacher assigns the group later, so neither is chosen here.
+        setSignupPeriod(config.period || '');
+        setSignupGroup('');
         setFormError('');
         setSignupStep(2);
       } catch (e) {
@@ -112,7 +105,6 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
     // Optional demo: teacher verification step before hitting the API (matches seeded Sikich account).
     if (
       !isSignUp &&
-      mode === 'teacher' &&
       email.trim().toLowerCase() === 'sikich@tamgu.com' &&
       password === 'sikich2026'
     ) {
@@ -278,34 +270,40 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
           <div className="absolute -bottom-12 -left-12 w-64 h-64 bg-cyan-100 rounded-full blur-3xl opacity-50 -z-10" />
           
           <div className="bg-white rounded-[2.5rem] p-3 shadow-2xl border border-gray-100 relative overflow-hidden">
-            {/* Mode Switcher */}
-            <div className="grid grid-cols-2 p-1.5 bg-gray-100 rounded-[2rem] mb-8">
-              <button 
-                onClick={() => handleModeChange('student')}
-                className={`py-3.5 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'student' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Student Access
-              </button>
-              <button 
-                onClick={() => handleModeChange('teacher')}
-                className={`py-3.5 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'teacher' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Teacher Portal
-              </button>
-            </div>
-
-            <div className="px-8 pb-10 space-y-6">
+            <div className="px-8 pt-8 pb-10 space-y-6">
               <div className="text-center">
                 <div className="mx-auto w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 text-blue-600 transform -rotate-6 group hover:rotate-0 transition-transform">
-                  {mode === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
+                  {isSignUp && mode === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
                 </div>
                 <h3 className="text-2xl font-black text-gray-900">
-                  {isSignUp ? (mode === 'student' ? `Student Sign Up ${signupStep === 1 ? '• Step 1' : '• Step 2'}` : 'Create Account') : (mode === 'student' ? 'Student Login' : 'Instructor Login')}
+                  {isSignUp
+                    ? (mode === 'student' ? `Student Sign Up ${signupStep === 1 ? '• Step 1' : '• Step 2'}` : 'Teacher Sign Up')
+                    : 'Log In'}
                 </h3>
                 <p className="text-gray-500 font-medium mt-1">
-                  {isSignUp ? 'Set up your account credentials.' : 'Enter your school credentials to begin.'}
+                  {isSignUp ? 'Set up your account.' : 'Sign in to Air Story to continue.'}
                 </p>
               </div>
+
+              {/* Role choice only matters when creating an account; logging in reads it from the account. */}
+              {isSignUp && (
+                <div className="grid grid-cols-2 p-1.5 bg-gray-100 rounded-[2rem]">
+                  <button
+                    type="button"
+                    onClick={() => handleRoleChange('student')}
+                    className={`py-3 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'student' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    I'm a Student
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRoleChange('teacher')}
+                    className={`py-3 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'teacher' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    I'm a Teacher
+                  </button>
+                </div>
+              )}
 
               <div className="space-y-4">
                 {isSignUp && (
@@ -346,32 +344,10 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
                                 className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
                               />
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div className="space-y-2">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Period</label>
-                                <select
-                                  value={signupPeriod}
-                                  onChange={(e) => {
-                                    const nextPeriod = e.target.value;
-                                    setSignupPeriod(nextPeriod);
-                                    const groups = joinConfig?.groupsByPeriod?.[nextPeriod] || ['G1', 'G2', 'G3', 'G4'];
-                                    setSignupGroup(groups[0] || 'G1');
-                                  }}
-                                  className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
-                                >
-                                  {(joinConfig?.periods || ['P1']).map((p) => <option key={p} value={p}>{p}</option>)}
-                                </select>
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Group</label>
-                                <select
-                                  value={signupGroup}
-                                  onChange={(e) => setSignupGroup(e.target.value)}
-                                  className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
-                                >
-                                  {(joinConfig?.groupsByPeriod?.[signupPeriod] || ['G1', 'G2', 'G3', 'G4']).map((g) => <option key={g} value={g}>{g}</option>)}
-                                </select>
-                              </div>
+                            <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
+                              <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Class Period</p>
+                              <p className="text-lg font-black text-blue-700">{signupPeriod || 'Assigned by your code'}</p>
+                              <p className="text-xs text-gray-500 font-medium mt-1">Your teacher will assign your group.</p>
                             </div>
                             <button
                               type="button"
@@ -426,9 +402,31 @@ const LandingPage = ({ onLogin, onRegister, filters, authError, authLoading }) =
               <Button onClick={handleLoginAttempt} className="w-full py-4 text-lg">
                 {isSignUp
                   ? (mode === 'student' ? (signupStep === 1 ? (loadingJoinConfig ? 'Checking Code...' : 'Next') : 'Create Account') : 'Create Account')
-                  : (mode === 'student' ? 'Join Lab Session' : 'Access Dashboard')} 
+                  : 'Log In'}
                 <ArrowRight size={22} className="ml-1" />
               </Button>
+              {onGoogleLogin && (
+                <>
+                  <div className="flex items-center gap-3 py-1">
+                    <div className="h-px bg-gray-200 flex-1" />
+                    <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">or</span>
+                    <div className="h-px bg-gray-200 flex-1" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onGoogleLogin}
+                    className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 bg-white text-gray-700 border border-gray-200 shadow-sm hover:bg-gray-50 active:scale-95 transition-all"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/>
+                    </svg>
+                    Continue with Google
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => {

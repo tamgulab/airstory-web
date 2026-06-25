@@ -17,7 +17,7 @@ router.use(requireAuth);
 
 router.get(
   "/workspaces/:workspaceId/sessions",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const result = await pool.query(
@@ -32,7 +32,7 @@ router.get(
 
 router.post(
   "/workspaces/:workspaceId/sessions",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(createSessionSchema),
   async (req, res) => {
     const { workspaceId } = req.params;
@@ -70,7 +70,7 @@ router.post(
 
 router.delete(
   "/workspaces/:workspaceId/sessions/:sessionId",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   async (req, res, next) => {
     const client = await pool.connect();
     try {
@@ -98,7 +98,7 @@ router.delete(
 
 router.get(
   "/workspaces/:workspaceId/measurements",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const {
@@ -189,7 +189,7 @@ router.get(
 
 router.post(
   "/workspaces/:workspaceId/import/csv",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   validate(importCsvMeasurementsSchema),
   async (req, res, next) => {
     const client = await pool.connect();
@@ -289,7 +289,7 @@ router.post(
 
 router.delete(
   "/workspaces/:workspaceId/measurements",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   async (req, res, next) => {
     const client = await pool.connect();
     try {
@@ -311,7 +311,7 @@ router.delete(
 
 router.post(
   "/workspaces/:workspaceId/measurements",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(createMeasurementSchema),
   async (req, res) => {
     const { workspaceId } = req.params;
@@ -344,7 +344,7 @@ router.post(
 
 router.patch(
   "/workspaces/:workspaceId/measurements/:measurementId",
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(updateMeasurementSchema),
   async (req, res) => {
     const { measurementId, workspaceId } = req.params;
@@ -373,7 +373,7 @@ router.patch(
 
 router.post(
   "/workspaces/:workspaceId/measurements/:measurementId/edits",
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   validate(addMeasurementEditSchema),
   async (req, res) => {
     const { workspaceId, measurementId } = req.params;

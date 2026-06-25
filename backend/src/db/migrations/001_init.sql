@@ -3,10 +3,14 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
+  -- Firebase owns credentials/identity; this links each app user to its Firebase account.
+  -- Unique so a Firebase account maps to at most one app user, and so we can ON CONFLICT on it.
+  firebase_uid TEXT,
   full_name TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid_key ON users(firebase_uid);
 
 CREATE TABLE IF NOT EXISTS workspaces (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,7 +23,7 @@ CREATE TABLE IF NOT EXISTS workspace_memberships (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'teacher', 'student')),
+  role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
   UNIQUE(workspace_id, user_id)
 );
 
@@ -69,13 +73,5 @@ CREATE TABLE IF NOT EXISTS session_photos (
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   photo_url TEXT NOT NULL,
   captured_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token TEXT NOT NULL UNIQUE,
-  expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

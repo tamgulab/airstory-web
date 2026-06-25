@@ -1,5 +1,24 @@
-import bcrypt from "bcryptjs";
 import { pool } from "./pool.js";
+import { firebaseAuth } from "../config/firebase-admin.js";
+
+/**
+ * Create (or update) the Firebase account for a seeded user and return its uid.
+ * Firebase owns credentials now, so seeded logins only work if these accounts exist there too.
+ */
+async function ensureFirebaseUser(email, password, displayName) {
+  const auth = firebaseAuth();
+  try {
+    const existing = await auth.getUserByEmail(email);
+    await auth.updateUser(existing.uid, { password, displayName });
+    return existing.uid;
+  } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      const created = await auth.createUser({ email, password, displayName });
+      return created.uid;
+    }
+    throw error;
+  }
+}
 
 const WORKSPACE_NAME = "Lincoln High School";
 const SCHOOL_CODE = "LINCOLN";
@@ -86,28 +105,28 @@ const STUDENTS = [
 async function run() {
   await pool.query("BEGIN");
   try {
-    // --- Users ---
-    const teacherHash = await bcrypt.hash("rivera2026", 10);
+    // --- Users (provisioned in Firebase, then linked here by firebase_uid) ---
+    const teacherUid = await ensureFirebaseUser("rivera@lincoln.mock", "rivera2026", "Ms. Rivera");
     const teacherRes = await pool.query(
-      `INSERT INTO users (email, password_hash, full_name)
+      `INSERT INTO users (email, firebase_uid, full_name)
        VALUES ($1, $2, $3)
-       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, full_name = EXCLUDED.full_name
+       ON CONFLICT (email) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid, full_name = EXCLUDED.full_name
        RETURNING id`,
-      ["rivera@lincoln.mock", teacherHash, "Ms. Rivera"]
+      ["rivera@lincoln.mock", teacherUid, "Ms. Rivera"]
     );
     const teacherId = teacherRes.rows[0].id;
 
-    const studentHash = await bcrypt.hash("lincoln2026", 10);
     const studentIds = {};
     for (const s of STUDENTS) {
       const email = `${s.username}@lincoln.mock`;
       const name = s.fullName || s.username;
+      const uid = await ensureFirebaseUser(email, "lincoln2026", name);
       const res = await pool.query(
-        `INSERT INTO users (email, password_hash, full_name)
+        `INSERT INTO users (email, firebase_uid, full_name)
          VALUES ($1, $2, $3)
-         ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, full_name = EXCLUDED.full_name
+         ON CONFLICT (email) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid, full_name = EXCLUDED.full_name
          RETURNING id`,
-        [email, studentHash, name]
+        [email, uid, name]
       );
       studentIds[s.username] = res.rows[0].id;
     }
@@ -134,7 +153,7 @@ async function run() {
     );
     await pool.query(
       `INSERT INTO workspace_memberships (workspace_id, user_id, role)
-       VALUES ($1, $2, 'owner')
+       VALUES ($1, $2, 'teacher')
        ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
       [workspaceId, teacherId]
     );
@@ -175,13 +194,13 @@ async function run() {
     // --- Join codes ---
     await pool.query(`DELETE FROM join_codes WHERE workspace_id = $1`, [workspaceId]);
     await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-       VALUES ($1, $2, 'P3RVK', $3, $4, true)`,
+      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+       VALUES ($1, $2, 'P3RVK', $3, $4, 'P3', true)`,
       [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
     );
     await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-       VALUES ($1, $2, 'P5RVM', $3, $4, false)`,
+      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+       VALUES ($1, $2, 'P5RVM', $3, $4, 'P5', false)`,
       [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
     );
 
@@ -247,7 +266,7 @@ async function run() {
       workspaceId,
       workspaceName: WORKSPACE_NAME,
       schoolCode: SCHOOL_CODE,
-      teacher: { email: "rivera@lincoln.mock", password: "rivera2026", role: "owner" },
+      teacher: { email: "rivera@lincoln.mock", password: "rivera2026", role: "teacher" },
       students: STUDENTS.map((s) => ({ email: `${s.username}@lincoln.mock`, password: "lincoln2026", period: s.period, group: s.group, studentCode: s.studentCode })),
       joinCodes: [{ code: "P3RVK", active: true }, { code: "P5RVM", active: false }],
       sessions: SESSION_SPECS.length,

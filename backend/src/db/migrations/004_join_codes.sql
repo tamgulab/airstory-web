@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS join_codes (
   code TEXT NOT NULL UNIQUE,
   school_code TEXT DEFAULT '',
   instructor TEXT DEFAULT '',
+  period TEXT DEFAULT '', -- class period this code enrolls students into (assigned automatically on signup)
   active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

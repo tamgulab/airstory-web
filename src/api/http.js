@@ -1,4 +1,6 @@
-// Backend mounts routes under `/api/...`. Paths in this file are like `/auth/login`.
+import { auth } from "../firebase";
+
+// Backend mounts routes under `/api/...`. Paths in this file are like `/auth/me`.
 // So the base must be `https://host/api` (NOT `https://host` alone), or every request 404s with "Not found".
 function getDefaultApiBase() {
   const isLocalhost =
@@ -25,31 +27,27 @@ function normalizeApiBase(raw) {
 }
 const API_BASE = normalizeApiBase(process.env.REACT_APP_API_BASE_URL);
 
-export function getStoredAuth() {
-  const raw = localStorage.getItem("air_auth");
-  if (!raw) return null;
+/**
+ * Current Firebase ID token, or null when signed out. The Firebase SDK caches and refreshes
+ * this automatically, so getIdToken() returns a valid (≈1 hr) token without our own refresh logic.
+ */
+async function getIdToken() {
+  const user = auth.currentUser;
+  if (!user) return null;
   try {
-    return JSON.parse(raw);
+    return await user.getIdToken();
   } catch {
     return null;
   }
 }
 
-export function setStoredAuth(auth) {
-  if (!auth) {
-    localStorage.removeItem("air_auth");
-    return;
-  }
-  localStorage.setItem("air_auth", JSON.stringify(auth));
-}
-
 export async function apiRequest(path, options = {}) {
-  const auth = getStoredAuth();
+  const token = await getIdToken();
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
-  if (auth?.accessToken) headers.Authorization = `Bearer ${auth.accessToken}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
 
   let response;
   try {

@@ -1,15 +1,11 @@
 import express from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { pool } from "../../db/pool.js";
-import { env } from "../../config/env.js";
-import { requireAuth, requireWorkspaceRole, signAccessToken, signRefreshToken } from "../../middleware/auth.js";
+import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
+import { firebaseAuth } from "../../config/firebase-admin.js";
 import { validate } from "../../middleware/validate.js";
 import {
-  changePasswordSchema,
   createJoinCodeSchema,
   getJoinCodeConfigSchema,
-  loginSchema,
   removeStudentSchema,
   registerSchema,
   resetStudentPasswordSchema,
@@ -37,11 +33,9 @@ async function getWorkspaceStructure(workspaceId) {
   return buildStructure(result.rows[0].period_count, result.rows[0].group_count);
 }
 
-function makeAuthResponse(user, workspaceId) {
-  const payload = { userId: user.id, email: user.email };
+function makeUserResponse(user, workspaceId) {
+  // Identity/session is owned by Firebase on the client; the backend only returns the app profile.
   return {
-    accessToken: signAccessToken(payload),
-    refreshToken: signRefreshToken(payload),
     user: {
       id: user.id,
       email: user.email,
@@ -52,11 +46,23 @@ function makeAuthResponse(user, workspaceId) {
 }
 
 router.post("/register", validate(registerSchema), async (req, res, next) => {
+  // The Firebase account is created on the client first; register provisions the matching app account.
+  // Requires a valid Firebase ID token (the user is already signed in to Firebase).
+  const authHeader = req.headers.authorization || "";
+  const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!idToken) return res.status(401).json({ error: "Missing Firebase auth token" });
+  let decoded;
+  try {
+    decoded = await firebaseAuth().verifyIdToken(idToken);
+  } catch {
+    return res.status(401).json({ error: "Invalid Firebase auth token" });
+  }
+  const firebaseUid = decoded.uid;
+
   const client = await pool.connect();
   try {
     const {
       email,
-      password,
       fullName,
       workspaceName,
       role,
@@ -68,64 +74,51 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       joinWorkspaceId,
     joinCode,
     } = req.validated.body;
-    const passwordHash = await bcrypt.hash(password, 10);
+    // The verified token email is the source of truth for identity; fall back to the posted email.
+    const accountEmail = String(decoded.email || email).trim().toLowerCase();
 
     await client.query("BEGIN");
+
+    // Reject duplicate provisioning so a second /register can't fork a user's workspace.
+    const existing = await client.query(`SELECT 1 FROM users WHERE firebase_uid = $1`, [firebaseUid]);
+    if (existing.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Account already registered" });
+    }
+
     const userResult = await client.query(
-      `INSERT INTO users (email, password_hash, full_name)
+      `INSERT INTO users (email, firebase_uid, full_name)
        VALUES ($1, $2, $3)
        RETURNING id, email, full_name`,
-      [email, passwordHash, fullName]
+      [accountEmail, firebaseUid, fullName]
     );
     const user = userResult.rows[0];
 
     let workspaceId = joinWorkspaceId;
     let profileSchoolCode = schoolCode || "";
     let profileInstructor = instructor || "";
+    // The student's period comes from the join code; their group is assigned later by the teacher.
+    let profilePeriod = role === "student" ? "" : (period || "");
     if (!workspaceId && role === "student") {
       if (!joinCode) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Student signup requires a teacher join code." });
       }
-      if (joinCode) {
-        const codeResult = await client.query(
-          `SELECT workspace_id, school_code, instructor
-           FROM join_codes
-           WHERE UPPER(code) = UPPER($1) AND active = TRUE
-           LIMIT 1`,
-          [joinCode.trim()]
-        );
-        if (!codeResult.rowCount) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Invalid or inactive join code" });
-        }
-        workspaceId = codeResult.rows[0].workspace_id;
-        profileSchoolCode = codeResult.rows[0].school_code || profileSchoolCode;
-        profileInstructor = codeResult.rows[0].instructor || profileInstructor;
-      } else {
-        const existingWorkspace = await client.query(
-          `SELECT id FROM workspaces WHERE name = $1 ORDER BY created_at ASC LIMIT 1`,
-          [workspaceName]
-        );
-        if (existingWorkspace.rowCount) {
-          workspaceId = existingWorkspace.rows[0].id;
-        }
-      }
-    }
-    let structure = buildStructure(1, 4);
-    if (workspaceId) {
-      structure = await getWorkspaceStructure(workspaceId);
-    }
-    if (role === "student") {
-      if (!structure.periods.includes(period)) {
+      const codeResult = await client.query(
+        `SELECT workspace_id, school_code, instructor, period
+         FROM join_codes
+         WHERE UPPER(code) = UPPER($1) AND active = TRUE
+         LIMIT 1`,
+        [joinCode.trim()]
+      );
+      if (!codeResult.rowCount) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Invalid period for this class setup." });
+        return res.status(400).json({ error: "Invalid or inactive join code" });
       }
-      const groups = structure.groupsByPeriod[period] || [];
-      if (!groups.includes(groupCode)) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Invalid group for selected period." });
-      }
+      workspaceId = codeResult.rows[0].workspace_id;
+      profileSchoolCode = codeResult.rows[0].school_code || profileSchoolCode;
+      profileInstructor = codeResult.rows[0].instructor || profileInstructor;
+      profilePeriod = codeResult.rows[0].period || "";
     }
     if (!workspaceId) {
       const wsResult = await client.query(
@@ -137,16 +130,9 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       workspaceId = wsResult.rows[0].id;
     }
 
-    // Join-code and normal student signup must stay "student". Only the workspace creator
-    // (teacher registration) becomes owner. joinWorkspaceId is for explicit invite flows.
-    const membershipRole =
-      role === "student"
-        ? "student"
-        : joinWorkspaceId
-          ? role === "teacher"
-            ? "teacher"
-            : "student"
-          : "owner";
+    // Two roles only: students stay "student"; everyone else is "teacher" (whether they create
+    // a new workspace or join an existing one via joinWorkspaceId).
+    const membershipRole = role === "student" ? "student" : "teacher";
 
     await client.query(
       `INSERT INTO workspace_memberships (workspace_id, user_id, role)
@@ -163,25 +149,21 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
         workspaceId,
         profileSchoolCode,
         profileInstructor,
-        period || "",
-        groupCode || "",
+        profilePeriod,
+        role === "student" ? "" : (groupCode || ""),
         studentCode || "",
       ]
     );
 
-    const auth = makeAuthResponse(user, workspaceId);
-    await client.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-      [user.id, auth.refreshToken]
-    );
-
     await client.query("COMMIT");
-    res.status(201).json(auth);
+    res.status(201).json(makeUserResponse(user, workspaceId));
   } catch (error) {
     await client.query("ROLLBACK");
     if (String(error.message).includes("users_email_key")) {
       return res.status(409).json({ error: "Email already exists" });
+    }
+    if (String(error.message).includes("users_firebase_uid_key")) {
+      return res.status(409).json({ error: "Account already registered" });
     }
     return next(error);
   } finally {
@@ -189,87 +171,10 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
   }
 });
 
-router.post("/login", validate(loginSchema), async (req, res, next) => {
-  try {
-    const { email, password } = req.validated.body;
-    const userResult = await pool.query(
-      `SELECT id, email, full_name, password_hash FROM users
-       WHERE LOWER(TRIM(email)) = $1`,
-      [email]
-    );
-    if (!userResult.rowCount) return res.status(401).json({ error: "Invalid credentials" });
-    const user = userResult.rows[0];
-
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: "Invalid credentials" });
-
-    const wsResult = await pool.query(
-      `SELECT wm.workspace_id
-       FROM workspace_memberships wm
-       JOIN workspaces w ON w.id = wm.workspace_id
-       WHERE wm.user_id = $1
-       ORDER BY w.created_at DESC
-       LIMIT 1`,
-      [user.id]
-    );
-    const workspaceId = wsResult.rows[0]?.workspace_id || null;
-
-    const auth = makeAuthResponse(user, workspaceId);
-    await pool.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-      [user.id, auth.refreshToken]
-    );
-    res.json(auth);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/change-password", requireAuth, validate(changePasswordSchema), async (req, res, next) => {
-  try {
-    const { email, newPassword } = req.validated.body;
-    const tokenEmail = String(req.user.email || "")
-      .trim()
-      .toLowerCase();
-    if (tokenEmail !== email) {
-      return res.status(403).json({ error: "Email must match your signed-in account" });
-    }
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.user.userId]);
-    await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [req.user.userId]);
-    res.status(204).send();
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/refresh", async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (!refreshToken) return res.status(400).json({ error: "refreshToken is required" });
-  try {
-    const decoded = jwt.verify(refreshToken, env.jwtRefreshSecret);
-    const tokenResult = await pool.query(
-      `SELECT 1 FROM refresh_tokens
-       WHERE token = $1 AND user_id = $2 AND expires_at > NOW()`,
-      [refreshToken, decoded.userId]
-    );
-    if (!tokenResult.rowCount) return res.status(401).json({ error: "Refresh token invalid" });
-
-    const accessToken = signAccessToken({ userId: decoded.userId, email: decoded.email });
-    return res.json({ accessToken });
-  } catch {
-    return res.status(401).json({ error: "Refresh token invalid" });
-  }
-});
-
-router.post("/logout", async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (refreshToken) {
-    await pool.query(`DELETE FROM refresh_tokens WHERE token = $1`, [refreshToken]);
-  }
-  res.status(204).send();
-});
+// Login, logout, session refresh, and password changes are handled entirely by the Firebase
+// client SDK (signInWithEmailAndPassword / signOut / automatic token refresh / updatePassword).
+// The backend no longer issues or refreshes tokens. Teacher-initiated student password resets
+// remain server-side via the Admin SDK — see POST /workspaces/:workspaceId/users/:userId/reset-password.
 
 router.get("/me", requireAuth, async (req, res) => {
   const userResult = await pool.query(
@@ -332,7 +237,7 @@ router.get(
   async (req, res) => {
     const { code } = req.params;
     const result = await pool.query(
-      `SELECT workspace_id, school_code, instructor
+      `SELECT workspace_id, school_code, instructor, period
        FROM join_codes
        WHERE UPPER(code) = UPPER($1) AND active = TRUE
        LIMIT 1`,
@@ -341,10 +246,13 @@ router.get(
     if (!result.rowCount) return res.status(404).json({ error: "Invalid or inactive join code" });
     const workspaceId = result.rows[0].workspace_id;
     const structure = await getWorkspaceStructure(workspaceId);
+    // The code fixes the student's period; the teacher assigns their group later. The student
+    // doesn't pick a period or group at signup, so `period` is returned only for display/confirmation.
     res.json({
       workspaceId,
       schoolCode: result.rows[0].school_code || "",
       instructor: result.rows[0].instructor || "",
+      period: result.rows[0].period || "",
       ...structure,
     });
   }
@@ -383,11 +291,11 @@ router.get("/workspaces/:workspaceId/roster", requireAuth, async (req, res) => {
 router.get(
   "/workspaces/:workspaceId/join-codes",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const result = await pool.query(
-      `SELECT id, code, school_code, instructor, active, created_at
+      `SELECT id, code, school_code, instructor, period, active, created_at
        FROM join_codes
        WHERE workspace_id = $1
        ORDER BY created_at DESC`,
@@ -400,7 +308,7 @@ router.get(
 router.get(
   "/workspaces/:workspaceId/class-structure",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher", "student"]),
+  requireWorkspaceRole(["teacher", "student"]),
   async (req, res) => {
     const { workspaceId } = req.params;
     const structure = await getWorkspaceStructure(workspaceId);
@@ -411,7 +319,7 @@ router.get(
 router.patch(
   "/workspaces/:workspaceId/class-structure",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(updateClassStructureSchema),
   async (req, res) => {
     const { workspaceId } = req.params;
@@ -435,17 +343,17 @@ router.patch(
 router.post(
   "/workspaces/:workspaceId/join-codes",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(createJoinCodeSchema),
   async (req, res, next) => {
     try {
       const { workspaceId } = req.params;
-      const { code, schoolCode, instructor, active } = req.validated.body;
+      const { code, schoolCode, instructor, period, active } = req.validated.body;
       const created = await pool.query(
-        `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, active)
-         VALUES ($1, $2, UPPER($3), $4, $5, $6)
-         RETURNING id, code, school_code, instructor, active, created_at`,
-        [workspaceId, req.user.userId, code.trim(), schoolCode || "", instructor || "", active]
+        `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
+         VALUES ($1, $2, UPPER($3), $4, $5, $6, $7)
+         RETURNING id, code, school_code, instructor, period, active, created_at`,
+        [workspaceId, req.user.userId, code.trim(), schoolCode || "", instructor || "", period || "", active]
       );
       res.status(201).json({ joinCode: created.rows[0] });
     } catch (error) {
@@ -460,7 +368,7 @@ router.post(
 router.patch(
   "/workspaces/:workspaceId/join-codes/:codeId",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(toggleJoinCodeSchema),
   async (req, res) => {
     const { workspaceId, codeId } = req.params;
@@ -469,7 +377,7 @@ router.patch(
       `UPDATE join_codes
        SET active = $1
        WHERE id = $2 AND workspace_id = $3
-       RETURNING id, code, school_code, instructor, active, created_at`,
+       RETURNING id, code, school_code, instructor, period, active, created_at`,
       [active, codeId, workspaceId]
     );
     if (!result.rowCount) return res.status(404).json({ error: "Join code not found" });
@@ -480,25 +388,29 @@ router.patch(
 router.post(
   "/workspaces/:workspaceId/users/:userId/reset-password",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(resetStudentPasswordSchema),
   async (req, res) => {
     const { workspaceId, userId } = req.params;
     const { newPassword } = req.validated.body;
 
     const student = await pool.query(
-      `SELECT wm.user_id
+      `SELECT u.firebase_uid
        FROM workspace_memberships wm
+       JOIN users u ON u.id = wm.user_id
        WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role = 'student'`,
       [workspaceId, userId]
     );
     if (!student.rowCount) {
       return res.status(404).json({ error: "Student not found in this workspace" });
     }
+    const firebaseUid = student.rows[0].firebase_uid;
+    if (!firebaseUid) {
+      return res.status(409).json({ error: "Student has no Firebase account" });
+    }
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, userId]);
-    await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+    // Reset the password in Firebase; existing sessions stay valid until their ID token expires.
+    await firebaseAuth().updateUser(firebaseUid, { password: newPassword });
     res.status(204).send();
   }
 );
@@ -506,7 +418,7 @@ router.post(
 router.patch(
   "/workspaces/:workspaceId/users/:userId/placement",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(updateStudentPlacementSchema),
   async (req, res) => {
     const { workspaceId, userId } = req.params;
@@ -535,7 +447,7 @@ router.patch(
 router.delete(
   "/workspaces/:workspaceId/users/:userId",
   requireAuth,
-  requireWorkspaceRole(["owner", "teacher"]),
+  requireWorkspaceRole(["teacher"]),
   validate(removeStudentSchema),
   async (req, res, next) => {
     const client = await pool.connect();

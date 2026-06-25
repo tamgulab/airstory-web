@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Info, Download, Share2 } from 'lucide-react';
-import { GoogleMap, LoadScript, HeatmapLayer, Marker, InfoWindow } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, HeatmapLayer, Marker, InfoWindow } from '@react-google-maps/api';
 import html2canvas from 'html2canvas';
 import { getImportedMeasurements } from '../utils/importedData';
 import { getHeatmapPoints } from '../api/data';
@@ -171,7 +171,6 @@ const HeatMapDashboard = ({
   const [displayMode, setDisplayMode] = useState('default'); // 'default' or 'accessible'
   const [, setMap] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const [mapsLoadError, setMapsLoadError] = useState('');
   const [schoolPinOpen, setSchoolPinOpen] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const screenshotRef = useRef(null);
@@ -185,6 +184,22 @@ const HeatMapDashboard = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [importedDataVersion]
   );
+
+  // Get Google Maps API key from environment variable
+  const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
+
+  // Load the Maps JS API once for the app's lifetime. useJsApiLoader is a module-level singleton,
+  // so it survives the mount/unmount churn (auth flow, tab switches) that made the old <LoadScript>
+  // hang on "Loading map…" when window.google was already partially defined from an aborted load.
+  const { isLoaded: isMapsApiLoaded, loadError } = useJsApiLoader({
+    id: 'airstory-google-maps',
+    googleMapsApiKey,
+    libraries: GOOGLE_MAP_LIBRARIES,
+    version: 'quarterly',
+  });
+  const mapsLoadError = loadError
+    ? 'Google Maps failed to load. This is usually caused by an invalid API key, missing billing, or referrer restrictions for this domain.'
+    : '';
 
   useEffect(() => {
     if (!workspaceId) {
@@ -701,9 +716,6 @@ const HeatMapDashboard = ({
     }
   }, [filters, generateCode, isCapturing]);
 
-  // Get Google Maps API key from environment variable
-  const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
-
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -799,21 +811,7 @@ const HeatMapDashboard = ({
           {/* Google Maps Container */}
           <div className="relative rounded-xl overflow-hidden border-2 border-gray-200 flex-1" style={{ minHeight: '600px' }}>
             {googleMapsApiKey ? (
-              <LoadScript
-                googleMapsApiKey={googleMapsApiKey}
-                libraries={GOOGLE_MAP_LIBRARIES}
-                onLoad={() => setMapsLoadError('')}
-                onError={() => {
-                  setMapsLoadError(
-                    'Google Maps failed to load. This is usually caused by an invalid API key, missing billing, or referrer restrictions for this domain.'
-                  );
-                }}
-                loadingElement={
-                  <div className="w-full h-full flex items-center justify-center bg-gray-50">
-                    <p className="text-sm text-gray-600 font-medium">Loading map…</p>
-                  </div>
-                }
-              >
+              isMapsApiLoaded ? (
                 <GoogleMap
                   mapContainerStyle={MAP_CONTAINER_STYLE}
                   center={mapCenter}
@@ -867,7 +865,11 @@ const HeatMapDashboard = ({
                     </>
                   )}
                 </GoogleMap>
-              </LoadScript>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gray-50">
+                  <p className="text-sm text-gray-600 font-medium">Loading map…</p>
+                </div>
+              )
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-gray-100">
                 <div className="text-center p-6">

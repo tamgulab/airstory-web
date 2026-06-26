@@ -13,6 +13,7 @@ const MyPage = ({
   onLogout,
   classStructure,
   onProfileSaved,
+  focusSchoolSignal = 0,
 }) => {
   const isTeacherRole = userRole === 'teacher';
   const [isEditing, setIsEditing] = useState(false);
@@ -27,6 +28,10 @@ const MyPage = ({
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState('');
   const [profileSaveBusy, setProfileSaveBusy] = useState(false);
+  const [schoolInput, setSchoolInput] = useState(viewerProfile.school || filters.school || '');
+  const [schoolBusy, setSchoolBusy] = useState(false);
+  const [schoolError, setSchoolError] = useState('');
+  const [schoolSaved, setSchoolSaved] = useState(false);
 
   const profileInitials = () => {
     const name = (viewerProfile.displayName || me?.user?.full_name || '').trim();
@@ -69,6 +74,25 @@ const MyPage = ({
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // Load the saved school into the editable field; updates after a save/profile sync.
+  // filters.school is intentionally omitted from deps to avoid clobbering the input while typing.
+  useEffect(() => {
+    setSchoolInput(viewerProfile.school || filters.school || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerProfile.school]);
+
+  // When navigated here via the Manage Classes "Edit" link, scroll to and focus the school field.
+  useEffect(() => {
+    if (!focusSchoolSignal) return;
+    const raf = requestAnimationFrame(() => {
+      const section = document.getElementById('school-setting');
+      const input = document.getElementById('school-input');
+      section?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      input?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusSchoolSignal]);
 
   const periodEditOptions = useMemo(() => {
     const p = periodsFromClassStructure(classStructure);
@@ -140,6 +164,23 @@ const MyPage = ({
   const handleCancel = () => {
     setTempFilters({ ...filters });
     setIsEditing(false);
+  };
+
+  const handleSaveSchool = async () => {
+    setSchoolError('');
+    setSchoolSaved(false);
+    setSchoolBusy(true);
+    try {
+      const value = schoolInput.trim();
+      await updateMyProfile({ schoolCode: value });
+      setFilters({ ...filters, school: value });
+      setSchoolSaved(true);
+      await onProfileSaved?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not save school.');
+    } finally {
+      setSchoolBusy(false);
+    }
   };
 
   return (
@@ -270,6 +311,41 @@ const MyPage = ({
             </div>
 
             <div className="space-y-4">
+              {isTeacherRole && (
+                <div id="school-setting">
+                  <label htmlFor="school-input" className="block text-sm font-semibold text-gray-700 mb-2">
+                    School
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      id="school-input"
+                      type="text"
+                      value={schoolInput}
+                      onChange={(e) => { setSchoolInput(e.target.value); setSchoolSaved(false); }}
+                      placeholder="Enter your school name"
+                      className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveSchool}
+                      disabled={schoolBusy}
+                      className={`shrink-0 px-4 py-2 ${theme.bg} ${theme.hover} text-white font-medium rounded-lg transition-colors disabled:opacity-50`}
+                    >
+                      {schoolBusy ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                  {schoolError ? (
+                    <p className="text-xs text-red-600 mt-1">{schoolError}</p>
+                  ) : schoolSaved ? (
+                    <p className="text-xs text-green-600 mt-1">School saved.</p>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Set the school name shown across your classes. If it isn’t set yet, you can set it here.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   {isTeacherRole ? 'Instructor / staff ID' : 'Student ID'}
@@ -388,7 +464,7 @@ const MyPage = ({
                 <strong className="text-gray-900">Version:</strong> 1.0.0
               </p>
               <p>
-                <strong className="text-gray-900">Last Updated:</strong> November 2025
+                <strong className="text-gray-900">Last Updated:</strong> June 25, 2026
               </p>
               <p>
                 Air Story is a comprehensive air quality monitoring platform designed for schools and communities.

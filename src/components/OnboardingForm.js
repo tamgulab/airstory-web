@@ -77,12 +77,12 @@ const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, subm
 
       <div className="space-y-4">
         <div className="space-y-2">
-          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
+          <label className="text-xs font-bold text-black uppercase tracking-widest ml-1">Full Name</label>
           <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} className={inputClass} />
         </div>
 
         <div className="space-y-2">
-          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">I am a…</label>
+          <label className="text-xs font-bold text-black uppercase tracking-widest ml-1">I am a…</label>
           <div className="grid grid-cols-2 gap-3">
             {['student', 'teacher'].map((r) => (
               <button
@@ -101,7 +101,7 @@ const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, subm
 
         {role === 'student' && (
           <div className="space-y-2">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Join Code</label>
+            <label className="text-xs font-bold text-black uppercase tracking-widest ml-1">Join Code</label>
             <div className="flex gap-2">
               <input
                 type="text"

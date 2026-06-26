@@ -84,6 +84,8 @@ const METRIC_THEMES = {
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [activeSection, setActiveSection] = useState("heatmap");
+  // Bumped to signal MyPage to scroll/focus the school field (e.g. from Manage Classes "Edit").
+  const [schoolFocusNonce, setSchoolFocusNonce] = useState(0);
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
   const [workspaceId, setWorkspaceId] = useState("");
@@ -710,6 +712,7 @@ export default function App() {
             onLogout={handleLogout}
             classStructure={classStructure}
             onProfileSaved={syncFromMe}
+            focusSchoolSignal={schoolFocusNonce}
           />
         )}
         {activeSection === 'manageclasses' && isTeacher && (
@@ -721,6 +724,10 @@ export default function App() {
             onClassStructureChanged={(next) => {
               if (next && typeof next === "object") setClassStructure(next);
               else refreshClassStructure();
+            }}
+            onEditSchool={() => {
+              setActiveSection("mypage");
+              setSchoolFocusNonce((n) => n + 1);
             }}
           />
         )}

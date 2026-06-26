@@ -19,6 +19,7 @@ export default function ManageClasses({
   onGroupSelect,
   viewerProfile,
   onClassStructureChanged,
+  onEditSchool,
 }) {
   const [members, setMembers] = useState([]);
   const [joinCodes, setJoinCodes] = useState([]);
@@ -339,7 +340,7 @@ export default function ManageClasses({
     if (accountsByGroup[`${p} ${g}`] > 0) coveredGroups += 1;
   }));
   const coverageWarn = coveredGroups < totalGroupSlots;
-  const schoolCode = viewerProfile?.school || '—';
+  const hasSchool = Boolean(viewerProfile?.school && String(viewerProfile.school).trim());
   const teacherName = viewerProfile?.instructor || '—';
 
   // Sessions per (period, group) for THIS teacher's class — feeds shrink protection (Section 4).
@@ -394,7 +395,20 @@ export default function ManageClasses({
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <div>
             <p className="text-xs text-gray-500">School · Teacher</p>
-            <p className="text-lg font-bold text-gray-900">{schoolCode}</p>
+            {hasSchool ? (
+              <p className="text-lg font-bold text-gray-900">{viewerProfile.school}</p>
+            ) : (
+              <p className="text-lg font-bold text-gray-900">
+                <span className="text-gray-400">Not set</span>{' '}
+                <button
+                  type="button"
+                  onClick={onEditSchool}
+                  className="align-middle text-sm font-semibold text-blue-600 hover:text-blue-700 underline"
+                >
+                  (Edit)
+                </button>
+              </p>
+            )}
             <p className="text-sm font-medium text-gray-600">{teacherName}</p>
           </div>
           <div>

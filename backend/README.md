@@ -14,6 +14,8 @@ verifies it with the Firebase Admin SDK and provisions/loads the matching app ac
    schema is applied automatically; no Shell step required.
 4. **Local dev:**
    - `npm run db:migrate` — create/update tables
+   - `npm run db:reset` — wipe the database and re-run all migrations (**deletes
+     all data** — dev/staging only; works with local Postgres or Supabase)
    - `npm run db:seed` — reset the Lincoln workspace (clears and recreates the teacher, students,
      sessions, and measurements)
 5. `npm run dev` (does **not** auto-migrate; run step 4 manually when the schema changes)

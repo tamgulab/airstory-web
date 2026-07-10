@@ -8,7 +8,8 @@
     "start": "node src/db/migrate.js && node src/server.js",
     "db:migrate": "node src/db/migrate.js",
     "db:reset": "node src/db/reset.js && node src/db/migrate.js",
-    "db:seed": "node src/db/seed.js"
+    "db:seed": "node src/db/seed.js",
+    "firebase:clear-users": "node src/db/clear-firebase-users.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

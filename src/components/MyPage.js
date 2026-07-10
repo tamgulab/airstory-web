@@ -121,7 +121,7 @@ const MyPage = ({
     setProfileSaveError('');
     setProfileSaveBusy(true);
     try {
-      await updateMyProfile({
+      await updateMyProfile(workspaceId, {
         schoolCode: tempFilters.school,
         instructor: tempFilters.instructor,
         period: tempFilters.period,

@@ -1,17 +1,13 @@
 import React, { useMemo, useState } from 'react';
-import { 
-  ArrowRight, 
-  BookOpen, 
-  Users, 
-  Beaker, 
-  GraduationCap, 
-  CheckCircle, 
-  XCircle, 
+import {
+  ArrowRight,
+  BookOpen,
+  Users,
+  Beaker,
   Leaf,
   Shield,
   Activity,
 } from 'lucide-react';
-import { getJoinCodeConfig } from '../api/auth';
 import AirStoryLogo from './AirStoryLogo';
 
 const Button = ({ children, variant = 'primary', className = '', ...props }) => {
@@ -42,107 +38,35 @@ const AIR_FACTS = [
   "Air quality sensors help communities spot local hotspots that citywide averages can miss.",
 ];
 
-const LandingPage = ({ onLogin, onRegister, onGoogleLogin, filters, authError, authLoading }) => {
-  const [mode, setMode] = useState('student');
+const LandingPage = ({ onLogin, onRegister, onGoogleLogin, authError, authLoading }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [joinCode, setJoinCode] = useState('');
-  const [signupInstructor, setSignupInstructor] = useState(filters.instructor || '');
-  const [signupPeriod, setSignupPeriod] = useState(filters.period || 'P1');
-  const [signupGroup, setSignupGroup] = useState(filters.group || 'G1');
-  const [showVerification, setShowVerification] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
   const [showHelp, setShowHelp] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
-  const [signupStep, setSignupStep] = useState(1);
   const [formError, setFormError] = useState('');
-  const [joinConfig, setJoinConfig] = useState(null);
-  const [loadingJoinConfig, setLoadingJoinConfig] = useState(false);
   const randomAirFact = useMemo(
     () => AIR_FACTS[Math.floor(Math.random() * AIR_FACTS.length)],
     []
   );
 
-  // Sign-up role choice (login needs no role — it's read from the account on the server).
-  const handleRoleChange = (newMode) => {
-    setFormError('');
-    setSignupStep(1);
-    setMode(newMode);
-  };
-
-  const handleLoginAttempt = async () => {
-    if (isSignUp && mode === 'student' && signupStep === 1) {
-      if (!/^[A-Z0-9]{5}$/.test(joinCode.trim().toUpperCase())) {
-        setFormError('Join code must be exactly 5 letters/numbers.');
+  const handleLoginAttempt = () => {
+    if (isSignUp) {
+      if (fullName.trim().length < 2) {
+        setFormError('Please enter your full name.');
         return;
       }
-      setLoadingJoinConfig(true);
-      try {
-        const config = await getJoinCodeConfig(joinCode.trim().toUpperCase());
-        setJoinConfig(config);
-        setSignupInstructor(config.instructor || signupInstructor);
-        // The code fixes the period; the teacher assigns the group later, so neither is chosen here.
-        setSignupPeriod(config.period || '');
-        setSignupGroup('');
-        setFormError('');
-        setSignupStep(2);
-      } catch (e) {
-        setFormError(e.message || 'Invalid join code.');
-      } finally {
-        setLoadingJoinConfig(false);
+      if (workspaceName.trim().length < 2) {
+        setFormError('Please name your workspace (e.g. "Lincoln High – Ms. Rivera").');
+        return;
       }
-      return;
-    }
-    if (isSignUp && mode === 'student' && !joinCode.trim()) {
-      setFormError('Student sign up requires a teacher join code.');
-      return;
-    }
-    if (isSignUp && mode === 'student' && !/^[A-Z0-9]{5}$/.test(joinCode.trim().toUpperCase())) {
-      setFormError('Join code must be exactly 5 letters/numbers.');
+      setFormError('');
+      onRegister({ email, password, fullName, workspaceName: workspaceName.trim() });
       return;
     }
     setFormError('');
-    // Optional demo: teacher verification step before hitting the API (matches seeded Sikich account).
-    if (
-      !isSignUp &&
-      email.trim().toLowerCase() === 'sikich@tamgu.com' &&
-      password === 'sikich2026'
-    ) {
-      setShowVerification(true);
-    } else {
-      if (isSignUp) {
-        onRegister({
-          email,
-          password,
-          fullName,
-          mode,
-          joinCode,
-          instructor: signupInstructor,
-          period: signupPeriod,
-          group: signupGroup,
-        });
-      } else {
-        onLogin({ email, password, mode });
-      }
-    }
-  };
-
-  const confirmVerification = () => {
-    setShowVerification(false);
-    if (isSignUp) {
-      onRegister({
-        email,
-        password,
-        fullName,
-        mode,
-        joinCode,
-        instructor: signupInstructor,
-        period: signupPeriod,
-        group: signupGroup,
-      });
-    } else {
-      onLogin({ email, password, mode });
-    }
+    onLogin({ email, password });
   };
 
   if (showHelp) {
@@ -160,50 +84,6 @@ const LandingPage = ({ onLogin, onRegister, onGoogleLogin, filters, authError, a
         <Button variant="secondary" onClick={() => setShowHelp(false)} className="w-full">
           Back to Login
         </Button>
-      </div>
-    );
-  }
-
-  if (showVerification) {
-    return (
-      <div className="w-full max-w-md mx-auto bg-white rounded-3xl p-8 shadow-2xl text-center space-y-6 animate-in zoom-in-95 duration-200">
-        <div className="mx-auto w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
-          {mode === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
-        </div>
-        <div>
-          <h2 className="text-2xl font-black text-gray-900 mb-2">Confirm User Info</h2>
-          <p className="text-gray-600 font-medium">Is this you?</p>
-        </div>
-        
-        <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 text-left space-y-4">
-          <div>
-            <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">{mode === 'student' ? 'Student Name' : 'Instructor Name'}</p>
-            <p className="text-lg font-bold text-gray-900">{fullName.trim() || email.trim() || '—'}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Access Level</p>
-            <p className="text-lg font-bold text-gray-900">{mode === 'student' ? 'Student' : 'Instructor'}</p>
-          </div>
-          {mode === 'student' && (
-            <div>
-               <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Sign-up selection</p>
-               <p className="text-lg font-bold text-blue-600 font-mono">
-                 {signupPeriod} • {signupGroup}
-                 {joinConfig?.schoolCode ? ` • ${joinConfig.schoolCode}` : ''}
-                 {signupInstructor ? ` • ${signupInstructor}` : ''}
-               </p>
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Button variant="danger" onClick={() => { setShowVerification(false); setShowHelp(true); }}>
-            <XCircle size={20} /> No
-          </Button>
-          <Button variant="success" onClick={confirmVerification}>
-            <CheckCircle size={20} /> Yes
-          </Button>
-        </div>
       </div>
     );
   }
@@ -273,136 +153,71 @@ const LandingPage = ({ onLogin, onRegister, onGoogleLogin, filters, authError, a
             <div className="px-8 pt-8 pb-10 space-y-6">
               <div className="text-center">
                 <div className="mx-auto w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 text-blue-600 transform -rotate-6 group hover:rotate-0 transition-transform">
-                  {isSignUp && mode === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
+                  <Users size={40} />
                 </div>
                 <h3 className="text-2xl font-black text-gray-900">
-                  {isSignUp
-                    ? (mode === 'student' ? `Student Sign Up ${signupStep === 1 ? '• Step 1' : '• Step 2'}` : 'Teacher Sign Up')
-                    : 'Log In'}
+                  {isSignUp ? 'Create a Workspace' : 'Log In'}
                 </h3>
                 <p className="text-gray-500 font-medium mt-1">
-                  {isSignUp ? 'Set up your account.' : 'Sign in to Air Story to continue.'}
+                  {isSignUp
+                    ? "You'll be the teacher and can invite students and co-teachers."
+                    : 'Sign in to Air Story to continue.'}
                 </p>
               </div>
-
-              {/* Role choice only matters when creating an account; logging in reads it from the account. */}
-              {isSignUp && (
-                <div className="grid grid-cols-2 p-1.5 bg-gray-100 rounded-[2rem]">
-                  <button
-                    type="button"
-                    onClick={() => handleRoleChange('student')}
-                    className={`py-3 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'student' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                    I'm a Student
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleRoleChange('teacher')}
-                    className={`py-3 rounded-[1.75rem] font-bold text-sm transition-all duration-300 ${mode === 'teacher' ? 'bg-white text-blue-600 shadow-lg scale-[1.02]' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                    I'm a Teacher
-                  </button>
-                </div>
-              )}
 
               <div className="space-y-4">
                 {isSignUp && (
                   <>
-                    {mode === 'student' && (
-                      <>
-                        {signupStep === 1 && (
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Join Code</label>
-                            <input
-                              type="text"
-                              value={joinCode}
-                              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                              placeholder="5-letter/number class code"
-                              maxLength={5}
-                              className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium tracking-wider uppercase"
-                            />
-                          </div>
-                        )}
-                        {signupStep === 2 && (
-                          <>
-                            <div className="space-y-2">
-                              <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
-                              <input
-                                type="text"
-                                value={fullName}
-                                onChange={(e) => setFullName(e.target.value)}
-                                className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Instructor (optional)</label>
-                              <input
-                                type="text"
-                                value={signupInstructor}
-                                onChange={(e) => setSignupInstructor(e.target.value)}
-                                placeholder="Class instructor name (as on your roster)"
-                                className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
-                              />
-                            </div>
-                            <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
-                              <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Class Period</p>
-                              <p className="text-lg font-black text-blue-700">{signupPeriod || 'Assigned by your code'}</p>
-                              <p className="text-xs text-gray-500 font-medium mt-1">Your teacher will assign your group.</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setSignupStep(1)}
-                              className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
-                            >
-                              Change Join Code
-                            </button>
-                          </>
-                        )}
-                      </>
-                    )}
-                    {mode === 'teacher' && (
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
-                        <input
-                          type="text"
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
-                        />
-                      </div>
-                    )}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
+                      <input
+                        type="text"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Workspace Name</label>
+                      <input
+                        type="text"
+                        value={workspaceName}
+                        onChange={(e) => setWorkspaceName(e.target.value)}
+                        placeholder='e.g. "Lincoln High – Ms. Rivera"'
+                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
+                      />
+                    </div>
                   </>
                 )}
-                {!(isSignUp && mode === 'student' && signupStep === 1) && (
-                  <>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Email Address</label>
-                      <input 
-                        type="email" 
-                        placeholder="name@school.edu" 
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium" 
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Password</label>
-                      <input 
-                        type="password" 
-                        placeholder="••••••••" 
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium" 
-                      />
-                    </div>
-                  </>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="name@school.edu"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Password</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl px-5 py-4 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
+                  />
+                </div>
+                {isSignUp && (
+                  <p className="text-xs text-gray-500 font-medium text-center">
+                    Joining a class? Use the invite link your teacher shared instead.
+                  </p>
                 )}
               </div>
 
               <Button onClick={handleLoginAttempt} className="w-full py-4 text-lg">
-                {isSignUp
-                  ? (mode === 'student' ? (signupStep === 1 ? (loadingJoinConfig ? 'Checking Code...' : 'Next') : 'Create Account') : 'Create Account')
-                  : 'Log In'}
+                {isSignUp ? 'Create Workspace' : 'Log In'}
                 <ArrowRight size={22} className="ml-1" />
               </Button>
               {onGoogleLogin && (
@@ -432,12 +247,10 @@ const LandingPage = ({ onLogin, onRegister, onGoogleLogin, filters, authError, a
                 onClick={() => {
                   setFormError('');
                   setIsSignUp((prev) => !prev);
-                  setSignupStep(1);
-                  setJoinConfig(null);
                 }}
                 className="w-full text-sm text-blue-600 hover:text-blue-700 font-semibold"
               >
-                {isSignUp ? 'Already have an account? Log in' : 'Need an account? Sign up'}
+                {isSignUp ? 'Already have an account? Log in' : 'New here? Create a workspace'}
               </button>
               {authError && (
                 <p className="text-sm text-red-600 text-center font-medium">{authError}</p>

@@ -211,6 +211,16 @@ components:
           type: string
         group_code:
           type: string
+        visibility:
+          type: string
+          enum: [public, school]
+          description: >
+            How far the session's data reaches. 'school' surfaces it in its school's aggregate
+            workspace; 'public' surfaces it in the Public workspace (and school). Enforced
+            server-side by the kind-aware read queries.
+        owner_student_code:
+          type: string
+          description: student_code of the session owner (empty for teacher-created sessions).
         started_at:
           type: string
           format: date-time
@@ -546,6 +556,21 @@ paths:
                           format: uuid
                         workspace_name:
                           type: string
+                        kind:
+                          type: string
+                          enum: [class, school, public]
+                          description: >
+                            'class' is a normal (writable) workspace. 'school' and 'public' are
+                            read-only aggregate views; every account auto-joins Public, and joins
+                            the 'school' workspace for each school its classes belong to.
+                        school_id:
+                          type: string
+                          format: uuid
+                          nullable: true
+                          description: The school this workspace belongs to (class) or represents (school). Null otherwise.
+                        school_name:
+                          type: string
+                          description: Display name of school_id, empty when unset.
                         role:
                           type: string
                           enum: [teacher, student]
@@ -591,6 +616,75 @@ paths:
                     $ref: '#/components/schemas/UserProfile'
         '404':
           description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/workspaces/{workspaceId}/school:
+    patch:
+      tags: [Auth]
+      summary: Set (or clear) the school a class workspace belongs to
+      description: >
+        Teacher-only. Sets workspaces.school_id for a class workspace, then reconciles every member's
+        aggregate memberships so they all join (or leave) the matching school workspace together.
+        Send schoolId=null to detach (e.g. a general user's school-less workspace).
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schoolId]
+              properties:
+                schoolId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated workspace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspace:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      name:
+                        type: string
+                      kind:
+                        type: string
+                        enum: [class, school, public]
+                      school_id:
+                        type: string
+                        format: uuid
+                        nullable: true
+        '400':
+          description: Not a class workspace, or unknown school
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Workspace not found
           content:
             application/json:
               schema:
@@ -1101,7 +1195,11 @@ paths:
   /workspaces/{workspaceId}/sessions:
     get:
       tags: [Sessions]
-      summary: List all sessions in a workspace
+      summary: List sessions visible in a workspace
+      description: >
+        Kind-aware scoping. class → sessions stored in this workspace. school → every school-class's
+        sessions flagged public or school. public → every session flagged public. Membership is
+        required (a user only belongs to the Public workspace and their own school workspace(s)).
       parameters:
         - name: workspaceId
           in: path
@@ -1165,6 +1263,13 @@ paths:
                 groupCode:
                   type: string
                   default: ''
+                visibility:
+                  type: string
+                  enum: [public, school]
+                  default: school
+                ownerCode:
+                  type: string
+                  default: ''
                 startedAt:
                   type: string
                   format: date-time
@@ -1222,12 +1327,70 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /workspaces/{workspaceId}/sessions/{sessionId}/visibility:
+    patch:
+      tags: [Sessions]
+      summary: Change how far a session's data reaches
+      description: >
+        Sets the session's visibility ('school' or 'public'). Authorized for the class teacher, or
+        for the session owner (owner_student_code == the caller's student_code). Only valid on a
+        class workspace (the read-only aggregate workspaces reject it).
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [visibility]
+              properties:
+                visibility:
+                  type: string
+                  enum: [public, school]
+      responses:
+        '200':
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    $ref: '#/components/schemas/Session'
+        '403':
+          description: Not the owner/teacher, or workspace is read-only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ── Measurements ──────────────────────────────────────────────────────────
 
   /workspaces/{workspaceId}/measurements:
     get:
       tags: [Measurements]
-      summary: List measurements in a workspace
+      summary: List measurements visible in a workspace
+      description: >
+        Kind-aware scoping like GET /sessions (class → this workspace; school → the school's
+        public+school data across classes; public → all public data), then the optional filters below.
       parameters:
         - name: workspaceId
           in: path
@@ -1580,6 +1743,7 @@ paths:
     get:
       tags: [Analytics]
       summary: Get aggregate statistics for a metric in a workspace
+      description: Uses the same kind-aware scoping as GET /measurements (class / school / public).
       parameters:
         - name: workspaceId
           in: path
@@ -1626,6 +1790,7 @@ paths:
     get:
       tags: [Analytics]
       summary: Get aggregated heatmap points for a workspace
+      description: Uses the same kind-aware scoping as GET /measurements (class / school / public).
       parameters:
         - name: workspaceId
           in: path
@@ -1664,7 +1829,9 @@ paths:
     get:
       tags: [Analytics]
       summary: Export workspace measurements as a CSV file
-      description: Returns up to 5000 measurements, most recent first.
+      description: >
+        Most recent first, using the same kind-aware scoping as GET /measurements
+        (class / school / public).
       parameters:
         - name: workspaceId
           in: path

@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, GraduationCap, LockKeyhole, Trash2, MoveRight, X, Copy, Mail } from 'lucide-react';
+import { GraduationCap, LockKeyhole, Trash2, MoveRight, X, Copy, Mail } from 'lucide-react';
 import {
-  createJoinCode,
+  buildInviteLink,
+  createInvitations,
   getClassStructure,
-  getJoinCodes,
+  getInvitations,
   getRoster,
   removeStudent,
   resetStudentPassword,
-  setJoinCodeActive,
+  revokeInvitation,
   updateClassStructure,
   updateStudentPlacement,
 } from '../api/auth';
@@ -22,12 +23,15 @@ export default function ManageClasses({
   onEditSchool,
 }) {
   const [members, setMembers] = useState([]);
-  const [joinCodes, setJoinCodes] = useState([]);
-  const [newCode, setNewCode] = useState('');
-  const [newCodePeriod, setNewCodePeriod] = useState('P3'); // period a newly created code joins to
+  const [invitations, setInvitations] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState('');
-  const [inviteSent, setInviteSent] = useState(0);
+  const [inviteRole, setInviteRole] = useState('student');
+  const [invitePeriod, setInvitePeriod] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  // After sending: { invitations: [...], skipped: [{email, reason}] } from the API.
+  const [inviteResult, setInviteResult] = useState(null);
+  const [revokeInviteTarget, setRevokeInviteTarget] = useState(null); // invitation pending revocation
   const [error, setError] = useState('');
   const [activeStudent, setActiveStudent] = useState(null);
   const [activeAction, setActiveAction] = useState('');
@@ -40,12 +44,11 @@ export default function ManageClasses({
   // draft row: { name, groups, savedName }  (savedName === null => newly added in this draft)
   const [draftRows, setDraftRows] = useState([]);
   const [savedGroupCounts, setSavedGroupCounts] = useState({});
-  const [deleteCodeTarget, setDeleteCodeTarget] = useState(null); // join code pending deletion
   // Actual period labels (e.g. P3, P5) when known; falls back to P1..Pn.
   const [periodLabels, setPeriodLabels] = useState(null);
   // Section 3: default visibility for new uploads/classes (public | school | group).
   const [defaultVisibility, setDefaultVisibility] = useState('group');
-  const [copiedCode, setCopiedCode] = useState('');
+  const [copiedKey, setCopiedKey] = useState('');
   // Section 4/5/6 state
   const [shrink, setShrink] = useState(null); // { blockers:[{period,group,accounts,sessions}], hasMembers } | null
   const [removeTarget, setRemoveTarget] = useState(null); // account pending removal
@@ -56,35 +59,27 @@ export default function ManageClasses({
   const [dropTarget, setDropTarget] = useState(null); // `${period}-${group}` being hovered
   const [toast, setToast] = useState(null); // { message, undo } | null
 
-  const generateRandomCode = () => {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    const code = Array.from(
-      { length: 5 },
-      () => alphabet[Math.floor(Math.random() * alphabet.length)]
-    ).join('');
-    setNewCode(code);
-  };
-
-  const copyCode = async (code) => {
+  /** Copy text to the clipboard with per-item "Copied" feedback (keyed by invite id, etc.). */
+  const copyText = async (text, key) => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(text);
     } catch {
       // clipboard may be unavailable (e.g. non-secure context); ignore
     }
-    setCopiedCode(code);
-    setTimeout(() => setCopiedCode((c) => (c === code ? '' : c)), 1500);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey((c) => (c === key ? '' : c)), 1500);
   };
 
   const load = async () => {
     if (!workspaceId) return;
     try {
-      const [roster, codes, structure] = await Promise.all([
+      const [roster, invites, structure] = await Promise.all([
         getRoster(workspaceId),
-        getJoinCodes(workspaceId),
+        getInvitations(workspaceId),
         getClassStructure(workspaceId),
       ]);
       setMembers(roster.members || []);
-      setJoinCodes(codes.joinCodes || []);
+      setInvitations(invites.invitations || []);
       // TODO(backend): structure is still (periodCount, groupCount) — expand to uniform
       // per-period counts until the backend returns a per-period list.
       const bp = structure.periodCount || 1;
@@ -169,13 +164,6 @@ export default function ManageClasses({
     });
   };
 
-  const doDeleteCode = (code) => {
-    if (!code) return;
-    // TODO(backend): code-delete endpoint. Mock: drop the record locally; members are unaffected.
-    setJoinCodes((prev) => prev.filter((c) => c.id !== code.id));
-    setDeleteCodeTarget(null);
-  };
-
   const showToast = (message, undo) => {
     setToast({ message, undo });
     setTimeout(() => setToast((t) => (t && t.message === message ? null : t)), 5000);
@@ -201,9 +189,13 @@ export default function ManageClasses({
     showToast(`Moved ${m.full_name || m.username} to ${period} · ${group}`, () => applyGroup(fromGroup));
   };
 
-  const shareCode = (period) => {
-    const code = joinCodes.find((c) => c.period === period && c.active) || joinCodes.find((c) => c.period === period);
-    if (code) copyCode(code.code);
+  /** Open the invite modal, optionally prefilled for a specific period (from the Groups section). */
+  const openInviteModal = ({ role = 'student', period = '' } = {}) => {
+    setInviteEmails('');
+    setInviteRole(role);
+    setInvitePeriod(period);
+    setInviteResult(null);
+    setInviteOpen(true);
   };
 
   const doRemoveStudent = async (student) => {
@@ -221,45 +213,52 @@ export default function ManageClasses({
     }
   };
 
-  const handleCreateCode = async () => {
-    const code = newCode.trim().toUpperCase();
-    if (!code) return;
-    if (!/^[A-Z0-9]{5}$/.test(code)) {
-      setError('Join code must be exactly 5 letters/numbers.');
+  const handleInvite = async () => {
+    const emails = inviteEmails.split(/[\s,]+/).map((e) => e.trim()).filter((e) => e.includes('@'));
+    if (!emails.length) {
+      setError('Enter at least one email address.');
       return;
     }
-    // School + teacher are fixed class context (from My Page / profile), not per-code inputs.
     try {
-      const created = await createJoinCode(workspaceId, {
-        code,
-        schoolCode: viewerProfile?.school || '',
-        instructor: viewerProfile?.instructor || '',
-        period: newCodePeriod || '',
-        active: true,
+      setInviteBusy(true);
+      const result = await createInvitations(workspaceId, {
+        emails,
+        role: inviteRole,
+        period: inviteRole === 'student' ? invitePeriod : '',
       });
-      setJoinCodes((prev) => [created.joinCode, ...prev]);
-      setNewCode('');
+      setInviteResult(result);
+      const created = result.invitations || [];
+      setInvitations((prev) => [
+        ...created,
+        ...prev.filter((i) => !created.some((c) => c.id === i.id)),
+      ]);
       setError('');
     } catch (e) {
-      setError(e.message || 'Failed to create join code.');
+      setError(e.message || 'Failed to create invitations.');
+    } finally {
+      setInviteBusy(false);
     }
   };
 
-  // Frontend-only invite: mock success. TODO(backend): invitation endpoint that emails each
-  // address an invitation carrying the class join code (with an email template).
-  const handleInvite = () => {
-    const emails = inviteEmails.split(/[\s,]+/).map((e) => e.trim()).filter((e) => e.includes('@'));
-    setInviteSent(emails.length);
-  };
-
-  const handleToggleCode = async (code) => {
+  const doRevokeInvitation = async (invite) => {
+    if (!invite) return;
     try {
-      const updated = await setJoinCodeActive(workspaceId, code.id, !code.active);
-      setJoinCodes((prev) => prev.map((c) => (c.id === code.id ? updated.joinCode : c)));
+      setBusy(true);
+      await revokeInvitation(workspaceId, invite.id);
+      setInvitations((prev) => prev.map((i) => (i.id === invite.id ? { ...i, status: 'revoked' } : i)));
+      setRevokeInviteTarget(null);
       setError('');
     } catch (e) {
-      setError(e.message || 'Failed to update join code.');
+      setError(e.message || 'Failed to revoke invitation.');
+    } finally {
+      setBusy(false);
     }
+  };
+
+  /** Display status: a pending invite past its expiry shows as expired (the server enforces it too). */
+  const inviteStatus = (invite) => {
+    if (invite.status === 'pending' && new Date(invite.expires_at) <= new Date()) return 'expired';
+    return invite.status;
   };
 
   const handleResetPassword = async (student) => {
@@ -327,8 +326,6 @@ export default function ManageClasses({
   // Group labels for a period derive from its saved count (G1..Gn) — counts can differ per period.
   const groupsFor = (period) => Array.from({ length: savedGroupCounts[period] || 0 }, (_, i) => `G${i + 1}`);
   const studentMembers = members.filter((m) => m.role === 'student');
-  // A join code counts as "used" if any member is in its period (proxy for sign-ups via that code).
-  const codeUsed = (code) => studentMembers.some((m) => m.period === code.period);
   const accountsByGroup = {};
   studentMembers.forEach((m) => {
     const key = `${m.period} ${m.group_code}`;
@@ -371,7 +368,7 @@ export default function ManageClasses({
               ?
             </button>
           </div>
-          <p className="text-gray-600">Teacher controls for groups, join codes, and student access</p>
+          <p className="text-gray-600">Teacher controls for groups, invitations, and student access</p>
         </div>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -517,90 +514,106 @@ export default function ManageClasses({
             Save Structure
           </button>
           <p className="text-xs text-gray-500 mt-3">
-            Student sign-up period/group options follow this structure. New uploads default to the selected visibility.
+            Invitation period options follow this structure. New uploads default to the selected visibility.
           </p>
         </div>
       </div>
 
-      {/* Row 2: Student Join Codes — full width */}
+      {/* Row 2: Invitations — full width */}
       <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="flex items-center gap-3 mb-4">
-          <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-            <KeyRound className="w-5 h-5 text-white" />
-          </div>
-          <h3 className="text-xl font-bold text-gray-900">Student Join Codes</h3>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          <input
-            value={newCode}
-            onChange={(e) => setNewCode(e.target.value.toUpperCase())}
-            placeholder="5-char code"
-            maxLength={5}
-            className="px-3 py-2 border border-gray-300 rounded-lg w-44 font-mono"
-          />
-          <select
-            value={newCodePeriod}
-            onChange={(e) => setNewCodePeriod(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
-          >
-            {savedPeriods.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <button
-            onClick={generateRandomCode}
-            className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200"
-          >
-            Regenerate
-          </button>
-          <button
-            onClick={handleCreateCode}
-            className={`${theme.bg} ${theme.hover} text-white rounded-lg px-3 py-2 text-sm`}
-          >
-            Create code
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {joinCodes.map((code) => (
-            <div key={code.id} className="p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-gray-900 font-mono">{code.code}</p>
-                  <p className="text-xs text-gray-500">
-                    {code.period ? `Period ${code.period}` : ''}{code.school_code ? ` · ${code.school_code}` : ''}{code.instructor ? ` · ${code.instructor}` : ''}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => copyCode(code.code)}
-                    title="Copy code"
-                    className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200"
-                  >
-                    {copiedCode === code.code
-                      ? <span className="text-xs text-green-600 font-medium px-0.5">Copied</span>
-                      : <Copy className="w-4 h-4" />}
-                  </button>
-                  <button
-                    onClick={() => handleToggleCode(code)}
-                    className={`px-3 py-1 rounded text-xs font-semibold ${code.active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-700'}`}
-                  >
-                    {code.active ? 'Active' : 'Inactive'}
-                  </button>
-                  <button
-                    onClick={() => setDeleteCodeTarget(code)}
-                    title="Delete code"
-                    className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs text-gray-500 mt-2">
-                Students enter this code when creating an account — joins them to {code.period || 'this class'}.
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
+              <Mail className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">Invitations</h3>
+              <p className="text-xs text-gray-500">
+                Invite students and co-teachers by email — each gets a personal join link to share with them.
               </p>
             </div>
-          ))}
-          {!joinCodes.length && (
-            <p className="text-sm text-gray-500">No join codes yet — create one above.</p>
-          )}
+          </div>
+          <button
+            onClick={() => openInviteModal()}
+            className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm inline-flex items-center gap-2`}
+          >
+            <Mail className="w-4 h-4" />
+            Invite people
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                <th className="py-2 pr-4">Email</th>
+                <th className="py-2 pr-4">Role</th>
+                <th className="py-2 pr-4">Period</th>
+                <th className="py-2 pr-4">Status</th>
+                <th className="py-2 pr-4">Expires</th>
+                <th className="py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {invitations.map((inv) => {
+                const status = inviteStatus(inv);
+                const statusStyles = {
+                  pending: 'bg-blue-100 text-blue-700',
+                  accepted: 'bg-green-100 text-green-700',
+                  revoked: 'bg-gray-200 text-gray-600',
+                  expired: 'bg-amber-100 text-amber-700',
+                };
+                return (
+                  <tr key={inv.id}>
+                    <td className="py-3 pr-4 font-medium text-gray-900">{inv.email}</td>
+                    <td className="py-3 pr-4 capitalize">{inv.role}</td>
+                    <td className="py-3 pr-4">{inv.period || '—'}</td>
+                    <td className="py-3 pr-4">
+                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${statusStyles[status] || statusStyles.pending}`}>
+                        {status}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">
+                      {inv.expires_at ? new Date(inv.expires_at).toLocaleDateString() : '—'}
+                    </td>
+                    <td className="py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        {status === 'pending' && (
+                          <>
+                            <button
+                              onClick={() => copyText(buildInviteLink(inv.token), inv.id)}
+                              title="Copy invite link"
+                              className="px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              {copiedKey === inv.id ? 'Copied' : 'Copy link'}
+                            </button>
+                            <button
+                              onClick={() => setRevokeInviteTarget(inv)}
+                              title="Revoke invitation"
+                              className="px-2 py-1.5 rounded text-xs bg-red-50 text-red-700 hover:bg-red-100 inline-flex items-center gap-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Revoke
+                            </button>
+                          </>
+                        )}
+                        {status === 'expired' && (
+                          <span className="text-xs text-gray-400">Re-invite to refresh the link</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!invitations.length && (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-gray-400">
+                    No invitations yet — invite students or co-teachers above.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -613,11 +626,11 @@ export default function ManageClasses({
             </div>
             <div>
               <h3 className="text-xl font-bold text-gray-900">Class Roster</h3>
-              <p className="text-xs text-gray-500">Everyone who joined with the class code.</p>
+              <p className="text-xs text-gray-500">Everyone who joined your workspace.</p>
             </div>
           </div>
           <button
-            onClick={() => { setInviteOpen(true); setInviteEmails(''); setInviteSent(0); }}
+            onClick={() => openInviteModal()}
             className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm inline-flex items-center gap-2`}
           >
             <Mail className="w-4 h-4" />
@@ -654,7 +667,7 @@ export default function ManageClasses({
                 </tr>
               ))}
               {studentMembers.length === 0 && (
-                <tr><td colSpan={5} className="py-6 text-center text-gray-400">No students yet — share a join code.</td></tr>
+                <tr><td colSpan={5} className="py-6 text-center text-gray-400">No students yet — invite them by email.</td></tr>
               )}
             </tbody>
           </table>
@@ -716,11 +729,11 @@ export default function ManageClasses({
                   >
                     {accts.length === 0 ? (
                       <button
-                        onClick={() => shareCode(period)}
+                        onClick={() => openInviteModal({ period })}
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100"
                       >
-                        <Copy className="w-3.5 h-3.5" />
-                        Share code
+                        <Mail className="w-3.5 h-3.5" />
+                        Invite
                       </button>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
@@ -830,25 +843,60 @@ export default function ManageClasses({
         </div>
       )}
 
-      {/* Invite students modal — frontend + mock success only */}
+      {/* Invite people modal — creates invitations and shows the personal join links to share */}
       {inviteOpen && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setInviteOpen(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !inviteBusy && setInviteOpen(false)}>
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h4 className="font-bold text-gray-900">Invite students</h4>
-              <button onClick={() => setInviteOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100">
+              <h4 className="font-bold text-gray-900">Invite people</h4>
+              <button onClick={() => !inviteBusy && setInviteOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100">
                 <X className="w-4 h-4 text-gray-500" />
               </button>
             </div>
             <div className="p-5 space-y-3">
-              {inviteSent > 0 ? (
-                <p className="text-sm text-green-700">
-                  Sent {inviteSent} invitation{inviteSent === 1 ? '' : 's'} carrying the class join code. (Mock — no email actually sent.)
-                </p>
+              {inviteResult ? (
+                <>
+                  {(inviteResult.invitations || []).length > 0 && (
+                    <>
+                      <p className="text-sm text-green-700">
+                        Created {inviteResult.invitations.length} invitation{inviteResult.invitations.length === 1 ? '' : 's'}. Share each link with its invitee:
+                      </p>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {inviteResult.invitations.map((inv) => (
+                          <div key={inv.id} className="flex items-center justify-between gap-2 p-2 bg-gray-50 rounded-lg">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">{inv.email}</p>
+                              <p className="text-xs text-gray-500 truncate font-mono">{buildInviteLink(inv.token)}</p>
+                            </div>
+                            <button
+                              onClick={() => copyText(buildInviteLink(inv.token), `modal-${inv.id}`)}
+                              className="shrink-0 px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              {copiedKey === `modal-${inv.id}` ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {(inviteResult.skipped || []).length > 0 && (
+                    <p className="text-xs text-amber-700">
+                      Skipped (already a member): {inviteResult.skipped.map((s) => s.email).join(', ')}
+                    </p>
+                  )}
+                  <button
+                    onClick={() => setInviteResult(null)}
+                    className="text-sm text-blue-600 hover:text-blue-700 font-semibold"
+                  >
+                    Invite more people
+                  </button>
+                </>
               ) : (
                 <>
                   <p className="text-xs text-gray-500">
-                    Enter one or more email addresses (comma- or newline-separated). Each gets an invitation email with your class join code.
+                    Enter one or more email addresses (comma- or newline-separated). Each gets a personal
+                    join link — re-inviting an email replaces its previous link.
                   </p>
                   <textarea
                     value={inviteEmails}
@@ -857,12 +905,38 @@ export default function ManageClasses({
                     placeholder="student@example.com, student2@example.com"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                   />
-                  {/* TODO(backend): invitation endpoint + email template carrying the join code. */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Role</label>
+                      <select
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                      >
+                        <option value="student">Student</option>
+                        <option value="teacher">Teacher</option>
+                      </select>
+                    </div>
+                    {inviteRole === 'student' && (
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Period (optional)</label>
+                        <select
+                          value={invitePeriod}
+                          onChange={(e) => setInvitePeriod(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                        >
+                          <option value="">Assign later</option>
+                          {savedPeriods.map((p) => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
                   <button
                     onClick={handleInvite}
-                    className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm`}
+                    disabled={inviteBusy}
+                    className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm disabled:opacity-60`}
                   >
-                    Send invitations
+                    {inviteBusy ? 'Creating…' : 'Create invitations'}
                   </button>
                 </>
               )}
@@ -882,7 +956,7 @@ export default function ManageClasses({
               </button>
             </div>
             <ul className="p-6 text-sm text-gray-700 space-y-2 list-disc ml-4">
-              <li>Create and share join codes with students for signup.</li>
+              <li>Invite students and co-teachers by email — share each personal join link from the Invitations section.</li>
               <li>Open a group&apos;s Raw Data from the Groups section; manage individual members in the Roster.</li>
               <li>Reset student passwords when needed (teacher support flow).</li>
               <li>Use period/group selections here to drive Raw Data and Analysis comparisons.</li>
@@ -951,19 +1025,17 @@ export default function ManageClasses({
         onConfirm={() => doRemoveStudent(removeTarget)}
       />
 
-      {/* Fix 2: delete-join-code confirmation (shared ConfirmDialog) */}
+      {/* Revoke-invitation confirmation (shared ConfirmDialog) */}
       <ConfirmDialog
-        open={!!deleteCodeTarget}
-        variant={deleteCodeTarget && codeUsed(deleteCodeTarget) ? 'danger' : 'default'}
-        title="Delete join code?"
-        message={deleteCodeTarget
-          ? (codeUsed(deleteCodeTarget)
-              ? `${deleteCodeTarget.code} has been used by members of ${deleteCodeTarget.period}. Removing it deletes the code record only — those members stay in the class and keep their accounts.`
-              : `${deleteCodeTarget.code} hasn't been used yet. Remove this code?`)
+        open={!!revokeInviteTarget}
+        variant="danger"
+        title="Revoke this invitation?"
+        message={revokeInviteTarget
+          ? `Revoke the invitation for ${revokeInviteTarget.email}? Their join link stops working immediately. You can re-invite them later.`
           : ''}
-        confirmLabel="Delete code"
-        onCancel={() => setDeleteCodeTarget(null)}
-        onConfirm={() => doDeleteCode(deleteCodeTarget)}
+        confirmLabel="Revoke"
+        onCancel={() => setRevokeInviteTarget(null)}
+        onConfirm={() => doRevokeInvitation(revokeInviteTarget)}
       />
     </div>
   );

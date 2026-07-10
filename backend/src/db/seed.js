@@ -1,5 +1,9 @@
+import crypto from "node:crypto";
 import { pool } from "./pool.js";
 import { firebaseAuth } from "../config/firebase-admin.js";
+
+// Same shape as the invite tokens minted by POST /auth/workspaces/:id/invitations.
+const makeInviteToken = () => crypto.randomBytes(32).toString("base64url");
 
 /**
  * Create (or update) the Firebase account for a seeded user and return its uid.
@@ -191,18 +195,31 @@ async function run() {
       [workspaceId, teacherId]
     );
 
-    // --- Join codes ---
-    await pool.query(`DELETE FROM join_codes WHERE workspace_id = $1`, [workspaceId]);
-    await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
-       VALUES ($1, $2, 'P3RVK', $3, $4, 'P3', true)`,
-      [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
-    );
-    await pool.query(
-      `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
-       VALUES ($1, $2, 'P5RVM', $3, $4, 'P5', false)`,
-      [workspaceId, teacherId, SCHOOL_CODE, INSTRUCTOR_NAME]
-    );
+    // --- Invitations ---
+    // Students joined by invitation in this model, so seed an accepted invite per student,
+    // plus two pending invites (student + co-teacher) whose links are printed for manual testing.
+    await pool.query(`DELETE FROM invitations WHERE workspace_id = $1`, [workspaceId]);
+    for (const s of STUDENTS) {
+      await pool.query(
+        `INSERT INTO invitations
+           (workspace_id, email, role, token, invited_by, period, status, accepted_at, accepted_by_user_id)
+         VALUES ($1, $2, 'student', $3, $4, $5, 'accepted', NOW(), $6)`,
+        [workspaceId, `${s.username}@lincoln.mock`, makeInviteToken(), teacherId, s.period, studentIds[s.username]]
+      );
+    }
+    const pendingInvites = [];
+    for (const invite of [
+      { email: "new.student@lincoln.mock", role: "student", period: "P3" },
+      { email: "chen@lincoln.mock", role: "teacher", period: "" },
+    ]) {
+      const token = makeInviteToken();
+      await pool.query(
+        `INSERT INTO invitations (workspace_id, email, role, token, invited_by, period)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [workspaceId, invite.email, invite.role, token, teacherId, invite.period]
+      );
+      pendingInvites.push({ email: invite.email, role: invite.role, link: `http://localhost:3000/join/${token}` });
+    }
 
     // --- Clear existing sessions/measurements for this workspace ---
     await pool.query(`DELETE FROM measurement_edits WHERE workspace_id = $1`, [workspaceId]);
@@ -268,7 +285,7 @@ async function run() {
       schoolCode: SCHOOL_CODE,
       teacher: { email: "rivera@lincoln.mock", password: "rivera2026", role: "teacher" },
       students: STUDENTS.map((s) => ({ email: `${s.username}@lincoln.mock`, password: "lincoln2026", period: s.period, group: s.group, studentCode: s.studentCode })),
-      joinCodes: [{ code: "P3RVK", active: true }, { code: "P5RVM", active: false }],
+      pendingInvites,
       sessions: SESSION_SPECS.length,
       measurements: totalMeasurements,
     });

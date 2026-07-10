@@ -63,26 +63,66 @@ components:
         student_code:
           type: string
 
-    JoinCode:
+    Invitation:
       type: object
       properties:
         id:
           type: string
           format: uuid
-        code:
+        email:
           type: string
-          example: ABC12
-        school_code:
+          format: email
+          description: Invitee email, normalized to lowercase
+        role:
           type: string
-        instructor:
-          type: string
+          enum: [teacher, student]
         period:
           type: string
-          description: Class period this code enrolls students into (assigned automatically on signup)
+          description: Optional pre-placement period for student invitees (teacher assigns the group later)
           example: P3
-        active:
-          type: boolean
+        group_code:
+          type: string
+        token:
+          type: string
+          description: >
+            URL-safe invite token. The client composes the shareable link as
+            `${origin}/join/${token}`; the backend never builds URLs.
+        status:
+          type: string
+          enum: [pending, accepted, revoked]
         created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+        invited_by_name:
+          type: string
+
+    InvitePreview:
+      type: object
+      description: Public preview of a pending invitation, shown on the /join/<token> landing page.
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        workspaceName:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [teacher, student]
+        period:
+          type: string
+        invitedBy:
+          type: string
+        expiresAt:
           type: string
           format: date-time
 
@@ -351,8 +391,11 @@ paths:
       summary: Provision the app account for a Firebase-authenticated user
       description: >
         The Firebase account is created on the client first; this endpoint provisions the
-        matching app account (workspace, membership, profile) and links it via firebase_uid
-        from the verified token. Identity email comes from the token.
+        matching app account and links it via firebase_uid from the verified token. Identity
+        email comes from the token. There are no standalone accounts: provide exactly one of
+        `workspaceName` (create a workspace and become its teacher) or `inviteToken` (join the
+        inviting workspace with the invitation's role). For invited signups the account email
+        must match the invitation email.
       requestBody:
         required: true
         content:
@@ -371,45 +414,27 @@ paths:
                 workspaceName:
                   type: string
                   minLength: 2
-                  default: Default Workspace
-                role:
+                  description: Create a new workspace with this name; the caller becomes its teacher
+                inviteToken:
                   type: string
-                  enum: [student, teacher]
-                  default: student
-                schoolCode:
-                  type: string
-                  maxLength: 64
-                instructor:
-                  type: string
-                  maxLength: 160
-                period:
-                  type: string
-                  maxLength: 16
-                  description: Ignored for students — a student's period is taken from the join code
-                groupCode:
-                  type: string
-                  maxLength: 16
-                  description: Ignored for students — the teacher assigns a student's group later
-                studentCode:
-                  type: string
-                joinWorkspaceId:
-                  type: string
-                  format: uuid
-                  description: UUID of an existing workspace to join (teacher invite flow)
-                joinCode:
-                  type: string
-                  minLength: 5
-                  maxLength: 5
-                  description: 5-character alphanumeric join code (required for students)
+                  minLength: 20
+                  maxLength: 128
+                  description: Join the inviting workspace; role and placement come from the invitation
       responses:
         '201':
           description: App account provisioned
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthUser'
+                allOf:
+                  - $ref: '#/components/schemas/AuthUser'
+                  - type: object
+                    properties:
+                      role:
+                        type: string
+                        enum: [teacher, student]
         '400':
-          description: Validation error (e.g. student signup requires a valid, active join code)
+          description: Validation error (exactly one of workspaceName or inviteToken is required)
           content:
             application/json:
               schema:
@@ -420,8 +445,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: The invitation was sent to a different email than the authenticated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Invitation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: Email already exists, or this Firebase account is already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Invitation expired, revoked, or already used
           content:
             application/json:
               schema:
@@ -430,7 +473,11 @@ paths:
   /auth/me:
     get:
       tags: [Auth]
-      summary: Get the authenticated user's info, memberships, and profile
+      summary: Get the authenticated user's info and per-workspace memberships
+      description: >
+        Each membership embeds its workspace-scoped profile. There is no server-side notion of
+        a "current" workspace — the client picks one (persisted locally) and passes workspaceId
+        to workspace-scoped endpoints.
       responses:
         '200':
           description: Current user
@@ -458,23 +505,29 @@ paths:
                         workspace_id:
                           type: string
                           format: uuid
+                        workspace_name:
+                          type: string
                         role:
                           type: string
                           enum: [teacher, student]
-                  profile:
-                    $ref: '#/components/schemas/UserProfile'
+                        profile:
+                          $ref: '#/components/schemas/UserProfile'
 
   /auth/me/profile:
     patch:
       tags: [Auth]
-      summary: Update the authenticated user's profile
+      summary: Update the authenticated user's profile in one workspace
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [workspaceId]
               properties:
+                workspaceId:
+                  type: string
+                  format: uuid
                 schoolCode:
                   type: string
                   maxLength: 64
@@ -504,55 +557,124 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /auth/join-code/{code}/config:
+  /auth/invitations/{token}:
     get:
       tags: [Auth]
-      summary: Get workspace config from a join code
+      summary: Preview a pending invitation by token
+      description: >
+        Unauthenticated. Backs the /join/<token> landing page so the invitee sees what
+        workspace and role they are joining before creating an account or logging in.
       security: []
       parameters:
-        - name: code
+        - name: token
           in: path
           required: true
           schema:
             type: string
-            minLength: 5
-            maxLength: 5
+            minLength: 20
+            maxLength: 128
       responses:
         '200':
-          description: Workspace configuration for this join code
+          description: Invitation preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitePreview'
+        '404':
+          description: Invitation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Invitation expired, revoked, or already used
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/invitations/{token}/accept:
+    post:
+      tags: [Auth]
+      summary: Accept an invitation as an already-authenticated user
+      description: >
+        Adds the authenticated user to the inviting workspace with the invitation's role and
+        placement (membership + workspace-scoped profile). The account email must match the
+        invitation email. Idempotent for existing members.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 20
+            maxLength: 128
+      responses:
+        '201':
+          description: Joined the workspace
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  workspaceId:
-                    type: string
-                    format: uuid
-                  schoolCode:
-                    type: string
-                  instructor:
-                    type: string
-                  period:
-                    type: string
-                    description: The period this code assigns the student to (the student does not choose it)
-                    example: P3
-                  periods:
-                    type: array
-                    items:
-                      type: string
-                    example: ["P1", "P2"]
-                  groupsByPeriod:
+                  workspace:
                     type: object
-                    additionalProperties:
-                      type: array
-                      items:
+                    properties:
+                      id:
                         type: string
-                  periodCount:
-                    type: integer
-                  groupCount:
-                    type: integer
+                        format: uuid
+                      name:
+                        type: string
+                  membership:
+                    type: object
+                    properties:
+                      workspace_id:
+                        type: string
+                        format: uuid
+                      role:
+                        type: string
+                        enum: [teacher, student]
+        '200':
+          description: Already a member of this workspace (invitation marked accepted)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alreadyMember:
+                    type: boolean
+                    example: true
+                  workspace:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      name:
+                        type: string
+                  membership:
+                    type: object
+                    properties:
+                      workspace_id:
+                        type: string
+                        format: uuid
+                      role:
+                        type: string
+                        enum: [teacher, student]
+        '403':
+          description: The invitation was sent to a different email than the authenticated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
-          description: Invalid or inactive join code
+          description: Invitation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Invitation expired, revoked, or already used
           content:
             application/json:
               schema:
@@ -588,11 +710,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /auth/workspaces/{workspaceId}/join-codes:
+  /auth/workspaces/{workspaceId}/invitations:
     get:
       tags: [Auth]
-      summary: List all join codes for a workspace
-      description: Requires teacher role.
+      summary: List all invitations for a workspace
+      description: >
+        Requires teacher role. Tokens are included so teachers can re-copy pending invite links.
       parameters:
         - name: workspaceId
           in: path
@@ -602,16 +725,16 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Join code list
+          description: Invitation list, newest first
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  joinCodes:
+                  invitations:
                     type: array
                     items:
-                      $ref: '#/components/schemas/JoinCode'
+                      $ref: '#/components/schemas/Invitation'
         '403':
           description: Insufficient role
           content:
@@ -621,8 +744,12 @@ paths:
 
     post:
       tags: [Auth]
-      summary: Create a join code for a workspace
-      description: Requires teacher role.
+      summary: Invite people to a workspace by email
+      description: >
+        Requires teacher role. Creates one pending invitation per email and returns the tokens;
+        the client composes the shareable links (`${origin}/join/${token}`). Emails that already
+        belong to workspace members are skipped. Re-inviting a pending email regenerates its
+        token and expiry (the old link stops working).
       parameters:
         - name: workspaceId
           in: path
@@ -636,55 +763,58 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code]
+              required: [emails, role]
               properties:
-                code:
+                emails:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: string
+                    format: email
+                role:
                   type: string
-                  minLength: 5
-                  maxLength: 5
-                  description: 5 alphanumeric characters, stored as uppercase
-                schoolCode:
-                  type: string
-                  default: ''
-                instructor:
-                  type: string
-                  default: ''
+                  enum: [teacher, student]
                 period:
                   type: string
-                  default: ''
-                  description: Class period students who use this code are enrolled into
+                  maxLength: 16
+                  description: Optional pre-placement period for student invitees; ignored for teachers
                   example: P3
-                active:
-                  type: boolean
-                  default: true
       responses:
         '201':
-          description: Join code created
+          description: Invitations created or refreshed
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  joinCode:
-                    $ref: '#/components/schemas/JoinCode'
+                  invitations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invitation'
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        email:
+                          type: string
+                          format: email
+                        reason:
+                          type: string
+                          enum: [already_member]
         '403':
           description: Insufficient role
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '409':
-          description: Join code already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
 
-  /auth/workspaces/{workspaceId}/join-codes/{codeId}:
-    patch:
+  /auth/workspaces/{workspaceId}/invitations/{invitationId}:
+    delete:
       tags: [Auth]
-      summary: Activate or deactivate a join code
-      description: Requires teacher role.
+      summary: Revoke a pending invitation
+      description: Requires teacher role. Only pending invitations can be revoked.
       parameters:
         - name: workspaceId
           in: path
@@ -692,32 +822,15 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: codeId
+        - name: invitationId
           in: path
           required: true
           schema:
             type: string
             format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [active]
-              properties:
-                active:
-                  type: boolean
       responses:
-        '200':
-          description: Updated join code
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  joinCode:
-                    $ref: '#/components/schemas/JoinCode'
+        '204':
+          description: Invitation revoked
         '403':
           description: Insufficient role
           content:
@@ -725,7 +838,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Join code not found
+          description: Pending invitation not found
           content:
             application/json:
               schema:
@@ -1696,7 +1809,7 @@ tags:
   - name: Health
     description: Service health check
   - name: Auth
-    description: User authentication, profiles, workspace membership, and join codes
+    description: User authentication, profiles, workspace membership, and invitations
   - name: Sessions
     description: Data collection sessions within a workspace
   - name: Measurements

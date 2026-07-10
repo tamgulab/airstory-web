@@ -1,21 +1,50 @@
+import crypto from "node:crypto";
 import express from "express";
 import { pool } from "../../db/pool.js";
 import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
 import { firebaseAuth } from "../../config/firebase-admin.js";
 import { validate } from "../../middleware/validate.js";
 import {
-  createJoinCodeSchema,
-  getJoinCodeConfigSchema,
+  createInvitationsSchema,
+  inviteTokenSchema,
   removeStudentSchema,
   registerSchema,
   resetStudentPasswordSchema,
-  toggleJoinCodeSchema,
+  revokeInvitationSchema,
   updateClassStructureSchema,
   updateMyProfileSchema,
   updateStudentPlacementSchema,
 } from "./auth.schemas.js";
 
 const router = express.Router();
+
+const makeInviteToken = () => crypto.randomBytes(32).toString("base64url");
+
+// Short display identifier used to mark ownership of data sessions (owner_student_code).
+const deriveStudentCode = (email, role) =>
+  role === "student" ? String(email).split("@")[0].toUpperCase() : "";
+
+/**
+ * Fetch an invitation by token and classify unusable states.
+ * Returns { invite } when pending and unexpired, else { status, error } for the HTTP response.
+ */
+async function loadInviteByToken(client, token, { forUpdate = false } = {}) {
+  const result = await client.query(
+    `SELECT i.*, w.name AS workspace_name, u.full_name AS invited_by_name
+     FROM invitations i
+     JOIN workspaces w ON w.id = i.workspace_id
+     LEFT JOIN users u ON u.id = i.invited_by
+     WHERE i.token = $1
+     ${forUpdate ? "FOR UPDATE OF i" : ""}`,
+    [token]
+  );
+  if (!result.rowCount) return { status: 404, error: "Invitation not found" };
+  const invite = result.rows[0];
+  if (invite.status === "revoked") return { status: 410, error: "This invitation was revoked." };
+  if (invite.status === "accepted") return { status: 410, error: "This invitation has already been used." };
+  if (new Date(invite.expires_at) <= new Date()) return { status: 410, error: "This invitation has expired." };
+  return { invite };
+}
 
 function buildStructure(periodCount = 1, groupCount = 4) {
   const periods = Array.from({ length: Number(periodCount) || 1 }, (_, i) => `P${i + 1}`);
@@ -61,19 +90,7 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
 
   const client = await pool.connect();
   try {
-    const {
-      email,
-      fullName,
-      workspaceName,
-      role,
-      schoolCode,
-      instructor,
-      period,
-      groupCode,
-      studentCode,
-      joinWorkspaceId,
-    joinCode,
-    } = req.validated.body;
+    const { email, fullName, workspaceName, inviteToken } = req.validated.body;
     // The verified token email is the source of truth for identity; fall back to the posted email.
     const accountEmail = String(decoded.email || email).trim().toLowerCase();
 
@@ -86,6 +103,23 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       return res.status(409).json({ error: "Account already registered" });
     }
 
+    // Resolve the invitation before creating anything so a bad token leaves no orphan user row.
+    let invite = null;
+    if (inviteToken) {
+      const lookup = await loadInviteByToken(client, inviteToken, { forUpdate: true });
+      if (!lookup.invite) {
+        await client.query("ROLLBACK");
+        return res.status(lookup.status).json({ error: lookup.error });
+      }
+      invite = lookup.invite;
+      if (invite.email !== accountEmail) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          error: `This invitation was sent to ${invite.email}; you are signed in as ${accountEmail}.`,
+        });
+      }
+    }
+
     const userResult = await client.query(
       `INSERT INTO users (email, firebase_uid, full_name)
        VALUES ($1, $2, $3)
@@ -94,33 +128,12 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
     );
     const user = userResult.rows[0];
 
-    let workspaceId = joinWorkspaceId;
-    let profileSchoolCode = schoolCode || "";
-    let profileInstructor = instructor || "";
-    // The student's period comes from the join code; their group is assigned later by the teacher.
-    let profilePeriod = role === "student" ? "" : (period || "");
-    if (!workspaceId && role === "student") {
-      if (!joinCode) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Student signup requires a teacher join code." });
-      }
-      const codeResult = await client.query(
-        `SELECT workspace_id, school_code, instructor, period
-         FROM join_codes
-         WHERE UPPER(code) = UPPER($1) AND active = TRUE
-         LIMIT 1`,
-        [joinCode.trim()]
-      );
-      if (!codeResult.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Invalid or inactive join code" });
-      }
-      workspaceId = codeResult.rows[0].workspace_id;
-      profileSchoolCode = codeResult.rows[0].school_code || profileSchoolCode;
-      profileInstructor = codeResult.rows[0].instructor || profileInstructor;
-      profilePeriod = codeResult.rows[0].period || "";
-    }
-    if (!workspaceId) {
+    let workspaceId;
+    let membershipRole;
+    if (invite) {
+      workspaceId = invite.workspace_id;
+      membershipRole = invite.role;
+    } else {
       const wsResult = await client.query(
         `INSERT INTO workspaces (name, created_by)
          VALUES ($1, $2)
@@ -128,11 +141,9 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
         [workspaceName, user.id]
       );
       workspaceId = wsResult.rows[0].id;
+      // Creating a workspace makes you its teacher; students only ever arrive by invitation.
+      membershipRole = "teacher";
     }
-
-    // Two roles only: students stay "student"; everyone else is "teacher" (whether they create
-    // a new workspace or join an existing one via joinWorkspaceId).
-    const membershipRole = role === "student" ? "student" : "teacher";
 
     await client.query(
       `INSERT INTO workspace_memberships (workspace_id, user_id, role)
@@ -147,16 +158,25 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       [
         user.id,
         workspaceId,
-        profileSchoolCode,
-        profileInstructor,
-        profilePeriod,
-        role === "student" ? "" : (groupCode || ""),
-        studentCode || "",
+        "",
+        "",
+        invite?.period || "",
+        invite?.group_code || "",
+        deriveStudentCode(accountEmail, membershipRole),
       ]
     );
 
+    if (invite) {
+      await client.query(
+        `UPDATE invitations
+         SET status = 'accepted', accepted_at = NOW(), accepted_by_user_id = $1
+         WHERE id = $2`,
+        [user.id, invite.id]
+      );
+    }
+
     await client.query("COMMIT");
-    res.status(201).json(makeUserResponse(user, workspaceId));
+    res.status(201).json({ ...makeUserResponse(user, workspaceId), role: membershipRole });
   } catch (error) {
     await client.query("ROLLBACK");
     if (String(error.message).includes("users_email_key")) {
@@ -181,21 +201,34 @@ router.get("/me", requireAuth, async (req, res) => {
     `SELECT id, email, full_name FROM users WHERE id = $1`,
     [req.user.userId]
   );
-  const wsResult = await pool.query(
-    `SELECT workspace_id, role FROM workspace_memberships WHERE user_id = $1`,
+  // One membership per workspace, each with its own profile. The client picks the
+  // "current" workspace; the server has no notion of a selected workspace.
+  const membershipResult = await pool.query(
+    `SELECT wm.workspace_id, w.name AS workspace_name, wm.role,
+            up.school_code, up.instructor, up.period, up.group_code, up.student_code
+     FROM workspace_memberships wm
+     JOIN workspaces w ON w.id = wm.workspace_id
+     LEFT JOIN user_profiles up ON up.user_id = wm.user_id AND up.workspace_id = wm.workspace_id
+     WHERE wm.user_id = $1
+     ORDER BY w.created_at`,
     [req.user.userId]
   );
-  const profileResult = await pool.query(
-    `SELECT workspace_id, school_code, instructor, period, group_code, student_code
-     FROM user_profiles
-     WHERE user_id = $1
-     LIMIT 1`,
-    [req.user.userId]
-  );
+  const memberships = membershipResult.rows.map((row) => ({
+    workspace_id: row.workspace_id,
+    workspace_name: row.workspace_name,
+    role: row.role,
+    profile: {
+      workspace_id: row.workspace_id,
+      school_code: row.school_code || "",
+      instructor: row.instructor || "",
+      period: row.period || "",
+      group_code: row.group_code || "",
+      student_code: row.student_code || "",
+    },
+  }));
   res.json({
     user: userResult.rows[0],
-    memberships: wsResult.rows,
-    profile: profileResult.rows[0] || null,
+    memberships,
   });
 });
 
@@ -205,9 +238,8 @@ router.patch("/me/profile", requireAuth, validate(updateMyProfileSchema), async 
     const existing = await pool.query(
       `SELECT workspace_id, school_code, instructor, period, group_code
        FROM user_profiles
-       WHERE user_id = $1
-       LIMIT 1`,
-      [req.user.userId]
+       WHERE user_id = $1 AND workspace_id = $2`,
+      [req.user.userId, body.workspaceId]
     );
     if (!existing.rowCount) {
       return res.status(404).json({ error: "Profile not found" });
@@ -220,10 +252,10 @@ router.patch("/me/profile", requireAuth, validate(updateMyProfileSchema), async 
 
     const updated = await pool.query(
       `UPDATE user_profiles
-       SET school_code = $1, instructor = $2, period = $3, group_code = $4
+       SET school_code = $1, instructor = $2, period = $3, group_code = $4, updated_at = NOW()
        WHERE user_id = $5 AND workspace_id = $6
        RETURNING workspace_id, school_code, instructor, period, group_code, student_code`,
-      [schoolCode, instructor, period, groupCode, req.user.userId, row.workspace_id]
+      [schoolCode, instructor, period, groupCode, req.user.userId, body.workspaceId]
     );
     res.json({ profile: updated.rows[0] });
   } catch (err) {
@@ -231,30 +263,100 @@ router.patch("/me/profile", requireAuth, validate(updateMyProfileSchema), async 
   }
 });
 
-router.get(
-  "/join-code/:code/config",
-  validate(getJoinCodeConfigSchema),
-  async (req, res) => {
-    const { code } = req.params;
-    const result = await pool.query(
-      `SELECT workspace_id, school_code, instructor, period
-       FROM join_codes
-       WHERE UPPER(code) = UPPER($1) AND active = TRUE
-       LIMIT 1`,
-      [code.trim()]
-    );
-    if (!result.rowCount) return res.status(404).json({ error: "Invalid or inactive join code" });
-    const workspaceId = result.rows[0].workspace_id;
-    const structure = await getWorkspaceStructure(workspaceId);
-    // The code fixes the student's period; the teacher assigns their group later. The student
-    // doesn't pick a period or group at signup, so `period` is returned only for display/confirmation.
-    res.json({
-      workspaceId,
-      schoolCode: result.rows[0].school_code || "",
-      instructor: result.rows[0].instructor || "",
-      period: result.rows[0].period || "",
-      ...structure,
-    });
+// Unauthenticated: the /join/<token> landing page shows what the invitee is joining
+// before they have an account.
+router.get("/invitations/:token", validate(inviteTokenSchema), async (req, res) => {
+  const lookup = await loadInviteByToken(pool, req.validated.params.token);
+  if (!lookup.invite) return res.status(lookup.status).json({ error: lookup.error });
+  const invite = lookup.invite;
+  res.json({
+    workspaceId: invite.workspace_id,
+    workspaceName: invite.workspace_name,
+    email: invite.email,
+    role: invite.role,
+    period: invite.period || "",
+    invitedBy: invite.invited_by_name || "",
+    expiresAt: invite.expires_at,
+  });
+});
+
+// Signed-in user accepts an invitation into an additional workspace.
+router.post(
+  "/invitations/:token/accept",
+  requireAuth,
+  validate(inviteTokenSchema),
+  async (req, res, next) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const lookup = await loadInviteByToken(client, req.validated.params.token, { forUpdate: true });
+      if (!lookup.invite) {
+        await client.query("ROLLBACK");
+        return res.status(lookup.status).json({ error: lookup.error });
+      }
+      const invite = lookup.invite;
+      if (invite.email !== req.user.email) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          error: `This invitation was sent to ${invite.email}; you are signed in as ${req.user.email}.`,
+        });
+      }
+
+      const workspace = { id: invite.workspace_id, name: invite.workspace_name };
+      const membership = await client.query(
+        `SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2`,
+        [invite.workspace_id, req.user.userId]
+      );
+      if (membership.rowCount) {
+        // Idempotent: retire the invite and report the existing membership.
+        await client.query(
+          `UPDATE invitations
+           SET status = 'accepted', accepted_at = NOW(), accepted_by_user_id = $1
+           WHERE id = $2`,
+          [req.user.userId, invite.id]
+        );
+        await client.query("COMMIT");
+        return res.status(200).json({
+          alreadyMember: true,
+          workspace,
+          membership: { workspace_id: invite.workspace_id, role: membership.rows[0].role },
+        });
+      }
+
+      await client.query(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role)
+         VALUES ($1, $2, $3)`,
+        [invite.workspace_id, req.user.userId, invite.role]
+      );
+      await client.query(
+        `INSERT INTO user_profiles (
+          user_id, workspace_id, school_code, instructor, period, group_code, student_code
+        ) VALUES ($1, $2, '', '', $3, $4, $5)`,
+        [
+          req.user.userId,
+          invite.workspace_id,
+          invite.period || "",
+          invite.group_code || "",
+          deriveStudentCode(req.user.email, invite.role),
+        ]
+      );
+      await client.query(
+        `UPDATE invitations
+         SET status = 'accepted', accepted_at = NOW(), accepted_by_user_id = $1
+         WHERE id = $2`,
+        [req.user.userId, invite.id]
+      );
+      await client.query("COMMIT");
+      res.status(201).json({
+        workspace,
+        membership: { workspace_id: invite.workspace_id, role: invite.role },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
   }
 );
 
@@ -279,7 +381,7 @@ router.get("/workspaces/:workspaceId/roster", requireAuth, async (req, res) => {
       up.student_code
     FROM workspace_memberships wm
     JOIN users u ON u.id = wm.user_id
-    LEFT JOIN user_profiles up ON up.user_id = wm.user_id
+    LEFT JOIN user_profiles up ON up.user_id = wm.user_id AND up.workspace_id = wm.workspace_id
     WHERE wm.workspace_id = $1
     ORDER BY wm.role DESC, up.period, up.group_code, u.full_name`,
     [workspaceId]
@@ -289,19 +391,23 @@ router.get("/workspaces/:workspaceId/roster", requireAuth, async (req, res) => {
 });
 
 router.get(
-  "/workspaces/:workspaceId/join-codes",
+  "/workspaces/:workspaceId/invitations",
   requireAuth,
   requireWorkspaceRole(["teacher"]),
   async (req, res) => {
     const { workspaceId } = req.params;
+    // Token is included so teachers can re-copy pending invite links; the route is teacher-gated.
     const result = await pool.query(
-      `SELECT id, code, school_code, instructor, period, active, created_at
-       FROM join_codes
-       WHERE workspace_id = $1
-       ORDER BY created_at DESC`,
+      `SELECT i.id, i.email, i.role, i.period, i.group_code, i.token, i.status,
+              i.created_at, i.expires_at, i.accepted_at,
+              u.full_name AS invited_by_name
+       FROM invitations i
+       LEFT JOIN users u ON u.id = i.invited_by
+       WHERE i.workspace_id = $1
+       ORDER BY i.created_at DESC`,
       [workspaceId]
     );
-    res.json({ joinCodes: result.rows });
+    res.json({ invitations: result.rows });
   }
 );
 
@@ -341,47 +447,72 @@ router.patch(
 );
 
 router.post(
-  "/workspaces/:workspaceId/join-codes",
+  "/workspaces/:workspaceId/invitations",
   requireAuth,
   requireWorkspaceRole(["teacher"]),
-  validate(createJoinCodeSchema),
+  validate(createInvitationsSchema),
   async (req, res, next) => {
+    const client = await pool.connect();
     try {
       const { workspaceId } = req.params;
-      const { code, schoolCode, instructor, period, active } = req.validated.body;
-      const created = await pool.query(
-        `INSERT INTO join_codes (workspace_id, created_by, code, school_code, instructor, period, active)
-         VALUES ($1, $2, UPPER($3), $4, $5, $6, $7)
-         RETURNING id, code, school_code, instructor, period, active, created_at`,
-        [workspaceId, req.user.userId, code.trim(), schoolCode || "", instructor || "", period || "", active]
-      );
-      res.status(201).json({ joinCode: created.rows[0] });
-    } catch (error) {
-      if (String(error.message).includes("join_codes_code_key")) {
-        return res.status(409).json({ error: "Join code already exists" });
+      const { emails, role, period } = req.validated.body;
+      const uniqueEmails = [...new Set(emails)];
+      const invitations = [];
+      const skipped = [];
+
+      await client.query("BEGIN");
+      for (const email of uniqueEmails) {
+        const member = await client.query(
+          `SELECT 1
+           FROM workspace_memberships wm
+           JOIN users u ON u.id = wm.user_id
+           WHERE wm.workspace_id = $1 AND u.email = $2`,
+          [workspaceId, email]
+        );
+        if (member.rowCount) {
+          skipped.push({ email, reason: "already_member" });
+          continue;
+        }
+        // Re-inviting a pending email regenerates the token and expiry (old link dies).
+        const created = await client.query(
+          `INSERT INTO invitations (workspace_id, email, role, token, invited_by, period)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (workspace_id, email) WHERE status = 'pending'
+           DO UPDATE SET role = EXCLUDED.role, token = EXCLUDED.token, period = EXCLUDED.period,
+                         invited_by = EXCLUDED.invited_by, created_at = NOW(),
+                         expires_at = NOW() + INTERVAL '14 days'
+           RETURNING id, email, role, period, group_code, token, status, created_at, expires_at`,
+          [workspaceId, email, role, makeInviteToken(), req.user.userId, role === "student" ? period : ""]
+        );
+        invitations.push(created.rows[0]);
       }
+      await client.query("COMMIT");
+      // The client composes the shareable link (`${origin}/join/${token}`); the backend never builds URLs.
+      res.status(201).json({ invitations, skipped });
+    } catch (error) {
+      await client.query("ROLLBACK");
       next(error);
+    } finally {
+      client.release();
     }
   }
 );
 
-router.patch(
-  "/workspaces/:workspaceId/join-codes/:codeId",
+router.delete(
+  "/workspaces/:workspaceId/invitations/:invitationId",
   requireAuth,
   requireWorkspaceRole(["teacher"]),
-  validate(toggleJoinCodeSchema),
+  validate(revokeInvitationSchema),
   async (req, res) => {
-    const { workspaceId, codeId } = req.params;
-    const { active } = req.validated.body;
+    const { workspaceId, invitationId } = req.params;
     const result = await pool.query(
-      `UPDATE join_codes
-       SET active = $1
-       WHERE id = $2 AND workspace_id = $3
-       RETURNING id, code, school_code, instructor, period, active, created_at`,
-      [active, codeId, workspaceId]
+      `UPDATE invitations
+       SET status = 'revoked'
+       WHERE id = $1 AND workspace_id = $2 AND status = 'pending'`,
+      [invitationId, workspaceId]
     );
-    if (!result.rowCount) return res.status(404).json({ error: "Join code not found" });
-    res.json({ joinCode: result.rows[0] });
+    if (!result.rowCount) return res.status(404).json({ error: "Pending invitation not found" });
+    res.status(204).send();
   }
 );
 

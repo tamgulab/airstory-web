@@ -1,28 +1,27 @@
 import { z } from "zod";
 
-const joinCodePattern = /^[A-Z0-9]{5}$/;
-
 const normalizedEmail = z
   .string()
   .email()
   .transform((s) => s.trim().toLowerCase());
 
+const inviteToken = z.string().trim().min(20).max(128);
+
 // Password is owned by Firebase (set on the client at sign-up), so it is not part of this payload.
 // The user's identity comes from the verified Firebase ID token sent in the Authorization header.
+// Two modes: workspaceName (create a workspace, become its teacher) XOR inviteToken (join the
+// inviting workspace with the invitation's role) — no standalone accounts.
 export const registerSchema = z.object({
-  body: z.object({
-    email: normalizedEmail,
-    fullName: z.string().min(2),
-    workspaceName: z.string().min(2).default("Default Workspace"),
-    role: z.enum(["student", "teacher"]).optional().default("student"),
-    schoolCode: z.string().optional().default(""),
-    instructor: z.string().optional().default(""),
-    period: z.string().optional().default(""),
-    groupCode: z.string().optional().default(""),
-    studentCode: z.string().optional().default(""),
-    joinWorkspaceId: z.string().uuid().optional(),
-    joinCode: z.string().trim().toUpperCase().regex(joinCodePattern, "Join code must be 5 letters/numbers.").optional(),
-  }),
+  body: z
+    .object({
+      email: normalizedEmail.optional(),
+      fullName: z.string().min(2),
+      workspaceName: z.string().trim().min(2).optional(),
+      inviteToken: inviteToken.optional(),
+    })
+    .refine((b) => Boolean(b.workspaceName) !== Boolean(b.inviteToken), {
+      message: "Provide exactly one of workspaceName (create a workspace) or inviteToken (join by invitation).",
+    }),
   params: z.object({}).passthrough(),
   query: z.object({}).passthrough(),
 });
@@ -30,13 +29,11 @@ export const registerSchema = z.object({
 // Login and self-service password changes are handled by the Firebase client SDK, so no
 // loginSchema / changePasswordSchema is needed here. resetStudentPasswordSchema (teacher action) remains below.
 
-export const createJoinCodeSchema = z.object({
+export const createInvitationsSchema = z.object({
   body: z.object({
-    code: z.string().trim().toUpperCase().regex(joinCodePattern, "Code must be 5 letters/numbers."),
-    schoolCode: z.string().optional().default(""),
-    instructor: z.string().optional().default(""),
-    period: z.string().optional().default(""),
-    active: z.boolean().optional().default(true),
+    emails: z.array(normalizedEmail).min(1).max(50),
+    role: z.enum(["student", "teacher"]),
+    period: z.string().max(16).optional().default(""), // students only; ignored for teachers
   }),
   params: z.object({
     workspaceId: z.string().uuid(),
@@ -44,13 +41,19 @@ export const createJoinCodeSchema = z.object({
   query: z.object({}).passthrough(),
 });
 
-export const toggleJoinCodeSchema = z.object({
-  body: z.object({
-    active: z.boolean(),
-  }),
+export const revokeInvitationSchema = z.object({
+  body: z.object({}).passthrough(),
   params: z.object({
     workspaceId: z.string().uuid(),
-    codeId: z.string().uuid(),
+    invitationId: z.string().uuid(),
+  }),
+  query: z.object({}).passthrough(),
+});
+
+export const inviteTokenSchema = z.object({
+  body: z.object({}).passthrough(),
+  params: z.object({
+    token: inviteToken,
   }),
   query: z.object({}).passthrough(),
 });
@@ -98,17 +101,10 @@ export const updateClassStructureSchema = z.object({
   query: z.object({}).passthrough(),
 });
 
-export const getJoinCodeConfigSchema = z.object({
-  body: z.object({}).passthrough(),
-  params: z.object({
-    code: z.string().trim().toUpperCase().regex(joinCodePattern, "Code must be 5 letters/numbers."),
-  }),
-  query: z.object({}).passthrough(),
-});
-
 /** Signed-in user updates their own row in user_profiles (school / class name / placement). */
 export const updateMyProfileSchema = z.object({
   body: z.object({
+    workspaceId: z.string().uuid(), // profiles are per-workspace
     schoolCode: z.string().max(64).optional(),
     instructor: z.string().max(160).optional(),
     period: z.string().max(16).optional(),

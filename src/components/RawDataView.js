@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
-import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements } from '../api/data';
+import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements, setSessionVisibility } from '../api/data';
 import {
   clearImportedMeasurements,
   getImportedMeasurements,
@@ -10,7 +10,7 @@ import {
   normalizeIndoorOutdoor,
   uniqueHierarchyFromImportedRows,
 } from '../utils/importedData';
-import { workspaceMeasurementsToDisplayRows, isRowVisibleToViewer } from '../utils/measurementRows';
+import { workspaceMeasurementsToDisplayRows } from '../utils/measurementRows';
 import DataCalendar from './DataCalendar';
 import ConfirmDialog from './ConfirmDialog';
 import {
@@ -37,15 +37,13 @@ const ck = (instructor, period) => `${instructor}|${period}`;
 const cToF = (c) => Math.round((Number(c) * 9) / 5 + 32);
 const fToC = (f) => Math.round(((Number(f) - 32) * 5) / 9);
 
-// Read-only visibility pills (Section 4). Visibility is set on the phone before upload.
-// Three levels: Group only (default) | School only | Public.
-// TODO(researcher-mode): 'class'/'me' removed for now — reserved for a future researcher mode.
+// Visibility pills (Section 4): how far a session's data reaches. The session owner (or the class
+// teacher) can promote/demote it; the server enforces the reach in the school/public workspaces.
 const VISIBILITY_META = {
-  group: { label: 'Group only', cls: 'bg-purple-100 text-purple-800', dot: 'bg-purple-500' },
   school: { label: 'School only', cls: 'bg-blue-100 text-blue-800', dot: 'bg-blue-500' },
   public: { label: 'Public', cls: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
 };
-const VISIBILITY_OPTIONS = ['group', 'school', 'public']; // Group only is the default
+const VISIBILITY_OPTIONS = ['school', 'public']; // School only is the default
 
 const INDOOR_OUTDOOR_OPTIONS = ['INDOOR', 'OUTDOOR'];
 
@@ -59,6 +57,7 @@ const RawDataView = ({
   theme,
   metricThemes,
   onImportedDataChanged,
+  isReadOnly = false, // true for the aggregate Public / school workspaces (server already scopes rows)
 }) => {
   const [rawData, setRawData] = useState(() => getImportedMeasurements());
   const [loadingBackend, setLoadingBackend] = useState(false);
@@ -93,14 +92,17 @@ const RawDataView = ({
   const [scopeClassKey, setScopeClassKey] = useState(ck(primaryMembership.instructor, primaryMembership.period));
   const [scopeGroup, setScopeGroup] = useState(primaryMembership.group);
 
-  // Shared scope + visibility predicates (used by the table AND the scope-aware Location options).
-  const rowVisible = (row) => isRowVisibleToViewer(row, viewerIdentity);
+  // Scope predicate (used by the table AND the scope-aware Location options). In the aggregate
+  // Public / school workspaces the server already returns exactly the rows the viewer may see, so
+  // the Group/Class/School convenience filter is bypassed. Visibility is enforced server-side.
   const rowInScope = (row) =>
-    scopeTab === 'school'
-      ? row.school === viewerIdentity.school
-      : scopeTab === 'class'
-        ? ck(row.instructor, row.period) === scopeClassKey
-        : ck(row.instructor, row.period) === scopeClassKey && row.group === scopeGroup;
+    isReadOnly
+      ? true
+      : scopeTab === 'school'
+        ? row.school === viewerIdentity.school
+        : scopeTab === 'class'
+          ? ck(row.instructor, row.period) === scopeClassKey
+          : ck(row.instructor, row.period) === scopeClassKey && row.group === scopeGroup;
 
   // Toolbar: draft values (bound to inputs) vs applied values (used by the table).
   // Search/date/location/metrics only take effect on [Apply]. Scope tabs are immediate.
@@ -188,18 +190,20 @@ const RawDataView = ({
   // Metrics are column toggles, not row filters, so they don't change available locations.
   const locations = useMemo(() => {
     const inScope = (r) =>
-      scopeTab === 'school'
-        ? r.school === viewerIdentity.school
-        : scopeTab === 'class'
-          ? ck(r.instructor, r.period) === scopeClassKey
-          : ck(r.instructor, r.period) === scopeClassKey && r.group === scopeGroup;
+      isReadOnly
+        ? true
+        : scopeTab === 'school'
+          ? r.school === viewerIdentity.school
+          : scopeTab === 'class'
+            ? ck(r.instructor, r.period) === scopeClassKey
+            : ck(r.instructor, r.period) === scopeClassKey && r.group === scopeGroup;
     return [...new Set(
       rawData
-        .filter((r) => inScope(r) && isRowVisibleToViewer(r, viewerIdentity))
+        .filter((r) => inScope(r))
         .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
         .map((d) => d.location)
     )];
-  }, [rawData, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity]);
+  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity]);
 
   // If the drafted location is no longer available (scope or date draft changed), deselect it.
   useEffect(() => {
@@ -264,15 +268,13 @@ const RawDataView = ({
 
     const matchesLocation = appliedLocation === 'all' || row.location === appliedLocation;
 
-    // Scope tab (Group / Class / School) + visibility — shared with the Location options.
+    // Scope tab (Group / Class / School) convenience filter; visibility is enforced server-side.
     const matchesScope = rowInScope(row);
-    const matchesVisibility = rowVisible(row);
-    
+
     // Date: no dates picked = no date filter; otherwise the row's date must be selected.
     const matchesDate = appliedDates.size === 0 || appliedDates.has(row.date);
 
-    return matchesSearch && matchesLocation && matchesDate &&
-           matchesScope && matchesVisibility;
+    return matchesSearch && matchesLocation && matchesDate && matchesScope;
   });
 
   // Sort data
@@ -299,7 +301,8 @@ const RawDataView = ({
   }
 
   // Empty-by-default: only show sessions once the student has engaged.
-  const viewRows = hasEngaged ? filteredData : [];
+  // Aggregate workspaces have no scope tabs to "engage" — show their data straight away.
+  const viewRows = (hasEngaged || isReadOnly) ? filteredData : [];
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(viewRows.length / itemsPerPage));
@@ -535,13 +538,19 @@ const RawDataView = ({
     }
   };
 
-  // TODO(backend): persist via a session visibility-update endpoint (e.g.
-  // PATCH /workspaces/:id/sessions/:sessionId { visibility }) with SERVER-SIDE owner
-  // authorization — only the session owner may change visibility. For now this updates
-  // local mock state only; ownership is mocked as the dev user's own sessions.
-  const handleVisibilityChange = (rowId, visibility) => {
-    setRawData((prev) => prev.map((r) => (r.id === rowId ? { ...r, visibility } : r)));
+  // Persist a session's visibility. The server authorizes (owner or class teacher) and enforces the
+  // reach; we update every display chunk that shares the session id, and revert if the call fails.
+  const handleVisibilityChange = async (row, visibility) => {
+    const { sessionId } = row;
+    const prevVisibility = row.visibility;
     setVisibilityMenu(null);
+    setRawData((prev) => prev.map((r) => (r.sessionId === sessionId ? { ...r, visibility } : r)));
+    try {
+      await setSessionVisibility(workspaceId, sessionId, visibility);
+    } catch (e) {
+      setRawData((prev) => prev.map((r) => (r.sessionId === sessionId ? { ...r, visibility: prevVisibility } : r)));
+      setImportError(`Could not update visibility. ${e?.message || ''}`.trim());
+    }
   };
 
   const markEdited = (rowIds, field) => {
@@ -733,11 +742,14 @@ const RawDataView = ({
             {viewerIdentity.school} · {primaryMembership.instructor} · {primaryMembership.period} · {primaryMembership.group}
           </div>
           <div className="flex items-center gap-3">
+          {!isReadOnly && (
           <label className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all cursor-pointer">
             <Upload className="w-4 h-4" />
             Import CSV
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
           </label>
+          )}
+          {!isReadOnly && (
           <button
             onClick={() => setConfirmState({
               variant: 'danger',
@@ -750,6 +762,7 @@ const RawDataView = ({
           >
             Clear Data
           </button>
+          )}
           <div className="relative">
             <button
               onClick={() => setExportMenuOpen((o) => !o)}
@@ -790,7 +803,8 @@ const RawDataView = ({
       {/* Merged toolbar: scope tabs · search · filter chips · Apply / Clear */}
       <div className="bg-white rounded-2xl p-4 shadow-lg border border-gray-200">
         <div className="flex flex-wrap items-center gap-3">
-          {/* Scope tabs */}
+          {/* Scope tabs — a within-class convenience filter; hidden in the aggregate workspaces. */}
+          {!isReadOnly && (
           <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
             {[
               { id: 'school', label: 'School' },
@@ -808,9 +822,10 @@ const RawDataView = ({
               </button>
             ))}
           </div>
+          )}
 
           {/* Scope selector (Group / Class) */}
-          {scopeTab === 'group' && (
+          {!isReadOnly && scopeTab === 'group' && (
             <div className="flex items-center gap-2">
               <select
                 value={scopeGroup}
@@ -824,7 +839,7 @@ const RawDataView = ({
               <span className="text-xs text-gray-500 whitespace-nowrap">in {selectedClassLabel}</span>
             </div>
           )}
-          {scopeTab === 'class' && (
+          {!isReadOnly && scopeTab === 'class' && (
             <select
               value={scopeClassKey}
               onChange={(e) => selectClassContext(e.target.value)}
@@ -976,7 +991,7 @@ const RawDataView = ({
       <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
         {viewRows.length === 0 && (
           <div className="px-6 py-16 text-center border-b border-gray-200">
-            {!hasEngaged ? (
+            {!hasEngaged && !isReadOnly ? (
               <>
                 <p className="text-lg font-semibold text-gray-800">Select a scope or filters to view sessions</p>
                 <p className="text-sm text-gray-500 mt-2">
@@ -1391,7 +1406,7 @@ const RawDataView = ({
                     {(() => {
                       const meta = VISIBILITY_META[row.visibility];
                       if (!meta) return <span className="text-gray-400">—</span>;
-                      const isOwner = row.ownerCode === viewerIdentity.studentCode;
+                      const isOwner = !isReadOnly && row.ownerCode === viewerIdentity.studentCode;
                       if (!isOwner) {
                         return (
                           <span className="group inline-flex items-center gap-1" title="Only the session owner can change this">
@@ -1417,7 +1432,7 @@ const RawDataView = ({
                               {VISIBILITY_OPTIONS.map((key) => (
                                 <button
                                   key={key}
-                                  onClick={(e) => { e.stopPropagation(); handleVisibilityChange(row.id, key); }}
+                                  onClick={(e) => { e.stopPropagation(); handleVisibilityChange(row, key); }}
                                   className={`flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs rounded-md hover:bg-gray-50 ${row.visibility === key ? 'font-semibold text-gray-900' : 'text-gray-600'}`}
                                 >
                                   <span className={`w-2 h-2 rounded-full ${VISIBILITY_META[key].dot}`} />

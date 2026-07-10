@@ -117,6 +117,14 @@ export async function updateMyProfile(workspaceId, { schoolCode, instructor, per
   });
 }
 
+/** Teacher: set (schoolId) or clear (null) the school this class workspace belongs to. */
+export async function setWorkspaceSchool(workspaceId, schoolId) {
+  return apiRequest(`/auth/workspaces/${workspaceId}/school`, {
+    method: "PATCH",
+    body: JSON.stringify({ schoolId: schoolId || null }),
+  });
+}
+
 export async function getRoster(workspaceId) {
   return apiRequest(`/auth/workspaces/${workspaceId}/roster`);
 }

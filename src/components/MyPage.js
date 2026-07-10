@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { User, Settings, HelpCircle, Shield, LogOut, Edit2, Save, X } from 'lucide-react';
-import { getMe, getRoster, changePassword, updateMyProfile } from '../api/auth';
+import { getMe, getRoster, changePassword, updateMyProfile, setWorkspaceSchool } from '../api/auth';
 import { getSchools } from '../api/schools';
 import { periodsFromClassStructure } from '../utils/classStructure';
 import SchoolCombobox from './SchoolCombobox';
@@ -16,6 +16,7 @@ const MyPage = ({
   classStructure,
   onProfileSaved,
   focusSchoolSignal = 0,
+  schoolEditable = false, // teacher of a class workspace: the school is a per-class setting
 }) => {
   const isTeacherRole = userRole === 'teacher';
   const [isEditing, setIsEditing] = useState(false);
@@ -85,21 +86,21 @@ const MyPage = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerProfile.school]);
 
-  // Pull the internal school directory for the picker (teachers only edit the school).
+  // Pull the internal school directory for the picker (only a class teacher edits the school).
   useEffect(() => {
-    if (!isTeacherRole) return undefined;
+    if (!schoolEditable) return undefined;
     let cancelled = false;
     getSchools()
       .then((data) => {
-        if (!cancelled) setSchoolOptions((data.schools || []).map((s) => s.name));
+        if (!cancelled) setSchoolOptions(data.schools || []);
       })
       .catch(() => {
-        // Directory unavailable — the combobox still accepts free text.
+        // Directory unavailable — nothing to pick from.
       });
     return () => {
       cancelled = true;
     };
-  }, [isTeacherRole]);
+  }, [schoolEditable]);
 
   // When navigated here via the Manage Classes "Edit" link, scroll to and focus the school field.
   useEffect(() => {
@@ -188,11 +189,17 @@ const MyPage = ({
   const handleSaveSchool = async () => {
     setSchoolError('');
     setSchoolSaved(false);
+    const value = schoolInput.trim();
+    // School now maps a class to its school workspace, so it must be a directory entry (not free text).
+    const match = schoolOptions.find((s) => s.name.toLowerCase() === value.toLowerCase());
+    if (!match) {
+      setSchoolError('Pick a school from the list.');
+      return;
+    }
     setSchoolBusy(true);
     try {
-      const value = schoolInput.trim();
-      await updateMyProfile(workspaceId, { schoolCode: value });
-      setFilters({ ...filters, school: value });
+      await setWorkspaceSchool(workspaceId, match.id);
+      setFilters({ ...filters, school: match.name });
       setSchoolSaved(true);
       await onProfileSaved?.();
     } catch (e) {
@@ -330,7 +337,7 @@ const MyPage = ({
             </div>
 
             <div className="space-y-4">
-              {isTeacherRole && (
+              {schoolEditable && (
                 <div id="school-setting">
                   <label htmlFor="school-input" className="block text-sm font-semibold text-gray-700 mb-2">
                     School
@@ -340,7 +347,7 @@ const MyPage = ({
                       id="school-input"
                       value={schoolInput}
                       onChange={(v) => { setSchoolInput(v); setSchoolSaved(false); }}
-                      options={schoolOptions}
+                      options={schoolOptions.map((s) => s.name)}
                       placeholder="Search or select your school"
                       inputClassName="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
@@ -356,10 +363,10 @@ const MyPage = ({
                   {schoolError ? (
                     <p className="text-xs text-red-600 mt-1">{schoolError}</p>
                   ) : schoolSaved ? (
-                    <p className="text-xs text-green-600 mt-1">School saved.</p>
+                    <p className="text-xs text-green-600 mt-1">School saved. Everyone in this class now shares its school workspace.</p>
                   ) : (
                     <p className="text-xs text-gray-500 mt-1">
-                      Set the school name shown across your classes. If it isn’t set yet, you can set it here.
+                      Sets the school for this whole class — its members join the school workspace and its data reaches other classes at this school.
                     </p>
                   )}
                 </div>

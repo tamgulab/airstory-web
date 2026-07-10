@@ -177,11 +177,13 @@ export default function App() {
     setInviteActionError("");
   }, []);
 
-  /** Prefer the locally persisted workspace; fall back to the first membership. */
+  /** Prefer the locally persisted workspace; else land in a class (not the Public/school views). */
   const pickMembership = (nextMemberships, preferredId) => {
     if (!nextMemberships?.length) return null;
     const storedId = preferredId || localStorage.getItem(WORKSPACE_STORAGE_KEY);
-    return nextMemberships.find((m) => m.workspace_id === storedId) || nextMemberships[0];
+    const stored = nextMemberships.find((m) => m.workspace_id === storedId);
+    if (stored) return stored;
+    return nextMemberships.find((m) => (m.kind || "class") === "class") || nextMemberships[0];
   };
 
   const syncFromMe = useCallback(async () => {
@@ -601,6 +603,16 @@ export default function App() {
 
   const isTeacher = userRole === "teacher";
 
+  // The Public / per-school aggregate workspaces are read-only views over other classes' data.
+  const currentMembership = memberships.find((m) => m.workspace_id === workspaceId) || null;
+  const currentWorkspaceKind = currentMembership?.kind || "class";
+  const isReadOnlyWorkspace = currentWorkspaceKind !== "class";
+  const workspaceSwitcherLabel = (m) => {
+    if (m.kind === "public") return "🌐 Public";
+    if (m.kind === "school") return `🏫 ${m.school_name || m.workspace_name || "School"}`;
+    return m.workspace_name || "Workspace";
+  };
+
   const teacherNavInitials = () => {
     const name = (viewerProfile.displayName || "").trim();
     const parts = name.split(/\s+/).filter(Boolean);
@@ -797,7 +809,7 @@ export default function App() {
                   >
                     {memberships.map((m) => (
                       <option key={m.workspace_id} value={m.workspace_id}>
-                        {m.workspace_name || "Workspace"}
+                        {workspaceSwitcherLabel(m)}
                       </option>
                     ))}
                   </select>
@@ -851,6 +863,7 @@ export default function App() {
             metricThemes={METRIC_THEMES}
             onImportedDataChanged={handleImportedDataChanged}
             classStructure={classStructure}
+            isReadOnly={isReadOnlyWorkspace}
           />
         )}
         {activeSection === 'analysis' && (
@@ -876,6 +889,7 @@ export default function App() {
             classStructure={classStructure}
             onProfileSaved={syncFromMe}
             focusSchoolSignal={schoolFocusNonce}
+            schoolEditable={isTeacher && currentWorkspaceKind === "class"}
           />
         )}
         {activeSection === 'manageclasses' && isTeacher && (

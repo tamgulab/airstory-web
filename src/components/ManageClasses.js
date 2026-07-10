@@ -46,8 +46,8 @@ export default function ManageClasses({
   const [savedGroupCounts, setSavedGroupCounts] = useState({});
   // Actual period labels (e.g. P3, P5) when known; falls back to P1..Pn.
   const [periodLabels, setPeriodLabels] = useState(null);
-  // Section 3: default visibility for new uploads/classes (public | school | group).
-  const [defaultVisibility, setDefaultVisibility] = useState('group');
+  // Section 3: default visibility for new uploads/classes (public | school).
+  const [defaultVisibility, setDefaultVisibility] = useState('school');
   const [copiedKey, setCopiedKey] = useState('');
   // Section 4/5/6 state
   const [shrink, setShrink] = useState(null); // { blockers:[{period,group,accounts,sessions}], hasMembers } | null
@@ -454,15 +454,13 @@ export default function ManageClasses({
               />
             </div>
             <div>
-              {/* TODO(backend): persist default visibility. Enum public|school|group, set at
-                  upload by the app; 'class'/'me' reserved for a future researcher mode. */}
+              {/* Default reach for new uploads: 'school' (this school) or 'public' (everyone). */}
               <label className="block text-xs text-gray-500 mb-1">Default visibility</label>
               <select
-                value={defaultVisibility}
+                value={defaultVisibility === 'group' ? 'school' : defaultVisibility}
                 onChange={(e) => setDefaultVisibility(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white"
               >
-                <option value="group">Group only</option>
                 <option value="school">School only</option>
                 <option value="public">Public</option>
               </select>

@@ -14,8 +14,20 @@ export const createSessionSchema = z.object({
     groupCode: z.string().optional().default(""),
     startedAt: z.string().datetime().optional(),
     endedAt: z.string().datetime().optional(),
-    visibility: z.enum(['public', 'school', 'group']).optional().default('group'),
+    visibility: z.enum(['public', 'school']).optional().default('school'),
     ownerCode: z.string().optional().default(''),
+  }),
+});
+
+/** Session owner (or the class teacher) changes how far a session's data reaches. */
+export const updateSessionVisibilitySchema = z.object({
+  params: z.object({
+    workspaceId: z.string().uuid(),
+    sessionId: z.string().uuid(),
+  }),
+  query: z.object({}).passthrough(),
+  body: z.object({
+    visibility: z.enum(['public', 'school']),
   }),
 });
 
@@ -88,7 +100,7 @@ const importRowSchema = z.object({
   co: z.number(),
   temp: z.number(),
   humidity: z.number(),
-  visibility: z.enum(['public', 'school', 'group']).optional().default('group'),
+  visibility: z.enum(['public', 'school']).optional().default('school'),
   ownerCode: z.string().optional().default('')
 });
 

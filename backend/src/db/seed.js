@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { pool } from "./pool.js";
 import { firebaseAuth } from "../config/firebase-admin.js";
+import { reconcileAggregateMemberships } from "../modules/auth/memberships.js";
 
 // Same shape as the invite tokens minted by POST /auth/workspaces/:id/invitations.
 const makeInviteToken = () => crypto.randomBytes(32).toString("base64url");
@@ -24,7 +25,8 @@ async function ensureFirebaseUser(email, password, displayName) {
   }
 }
 
-const WORKSPACE_NAME = "Lincoln High School";
+const WORKSPACE_NAME = "Ms. Rivera's Science Class"; // a class workspace (distinct from the school)
+const SCHOOL_NAME = "Lincoln High School"; // must match a row in the schools directory (006_schools.sql)
 const SCHOOL_CODE = "LINCOLN";
 const INSTRUCTOR_NAME = "Ms. Rivera";
 
@@ -135,16 +137,22 @@ async function run() {
       studentIds[s.username] = res.rows[0].id;
     }
 
-    // --- Workspace ---
+    // --- Workspace (a class) tagged with its school so its members join the school workspace ---
+    const schoolRow = await pool.query(`SELECT id FROM schools WHERE name = $1 LIMIT 1`, [SCHOOL_NAME]);
+    const schoolId = schoolRow.rows[0]?.id || null;
+
     let workspaceId;
-    const existingWs = await pool.query(`SELECT id FROM workspaces WHERE name = $1 LIMIT 1`, [WORKSPACE_NAME]);
+    const existingWs = await pool.query(
+      `SELECT id FROM workspaces WHERE name = $1 AND kind = 'class' LIMIT 1`,
+      [WORKSPACE_NAME]
+    );
     if (existingWs.rowCount) {
       workspaceId = existingWs.rows[0].id;
-      await pool.query(`UPDATE workspaces SET created_by = $1 WHERE id = $2`, [teacherId, workspaceId]);
+      await pool.query(`UPDATE workspaces SET created_by = $1, school_id = $2 WHERE id = $3`, [teacherId, schoolId, workspaceId]);
     } else {
       const wsRes = await pool.query(
-        `INSERT INTO workspaces (name, created_by) VALUES ($1, $2) RETURNING id`,
-        [WORKSPACE_NAME, teacherId]
+        `INSERT INTO workspaces (name, kind, created_by, school_id) VALUES ($1, 'class', $2, $3) RETURNING id`,
+        [WORKSPACE_NAME, teacherId, schoolId]
       );
       workspaceId = wsRes.rows[0].id;
     }
@@ -183,6 +191,11 @@ async function run() {
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [studentIds[s.username], workspaceId, SCHOOL_CODE, INSTRUCTOR_NAME, s.period, s.group, s.studentCode]
       );
+    }
+
+    // --- Auto-join Public + the Lincoln school workspace for every seeded member ---
+    for (const userId of allUserIds) {
+      await reconcileAggregateMemberships(pool, userId);
     }
 
     // --- Class structure ---
@@ -243,7 +256,7 @@ async function run() {
           workspaceId, teacherId, spec.sessionId, spec.sessionName, spec.location,
           spec.school, spec.instructor, spec.period, spec.group,
           startedAt.toISOString(), endedAt.toISOString(),
-          spec.visibility, spec.ownerCode,
+          spec.visibility === "group" ? "school" : spec.visibility, spec.ownerCode,
         ]
       );
       const sessionId = sessionRes.rows[0].id;

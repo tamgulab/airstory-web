@@ -90,6 +90,17 @@ export const removeStudentSchema = z.object({
   query: z.object({}).passthrough(),
 });
 
+/** Teacher sets (or clears, with null) the school a class workspace belongs to. */
+export const setWorkspaceSchoolSchema = z.object({
+  body: z.object({
+    schoolId: z.string().uuid().nullable(),
+  }),
+  params: z.object({
+    workspaceId: z.string().uuid(),
+  }),
+  query: z.object({}).passthrough(),
+});
+
 export const updateClassStructureSchema = z.object({
   body: z.object({
     periodCount: z.number().int().min(1).max(12),

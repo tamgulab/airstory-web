@@ -8,31 +8,59 @@ import {
   createSessionSchema,
   importCsvMeasurementsSchema,
   updateMeasurementSchema,
+  updateSessionVisibilitySchema,
 } from "./sensor.schemas.js";
+import { buildScopedDataFilter, resolveWorkspaceScope } from "./scope.js";
 
 const router = express.Router();
 
 /**Runs on every request that reaches this router before handler */
 router.use(requireAuth);
 
+/** Reject writes aimed at the read-only Public / school aggregate workspaces. */
+async function requireClassWorkspace(req, res, next) {
+  try {
+    const scope = await resolveWorkspaceScope(req.params.workspaceId);
+    if (!scope) return res.status(404).json({ error: "Workspace not found" });
+    if (scope.kind !== "class") {
+      return res.status(403).json({ error: "This workspace is read-only" });
+    }
+    req.workspaceScope = scope;
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+}
+
 router.get(
   "/workspaces/:workspaceId/sessions",
   requireWorkspaceRole(["teacher", "student"]),
-  async (req, res) => {
-    const { workspaceId } = req.params;
-    const result = await pool.query(
-      `SELECT * FROM sessions
-       WHERE workspace_id = $1
-       ORDER BY created_at DESC`,
-      [workspaceId]
-    );
-    res.json({ sessions: result.rows });
+  async (req, res, next) => {
+    try {
+      const { workspaceId } = req.params;
+      const scope = await resolveWorkspaceScope(workspaceId);
+      if (!scope) return res.status(404).json({ error: "Workspace not found" });
+
+      const values = [];
+      const { joinSql, whereClauses } = buildScopedDataFilter(scope, workspaceId, values);
+      const result = await pool.query(
+        `SELECT s.* FROM sessions s
+         ${joinSql}
+         WHERE ${whereClauses.join(" AND ")}
+         ORDER BY s.created_at DESC`,
+        values
+      );
+      res.json({ sessions: result.rows });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 
 router.post(
   "/workspaces/:workspaceId/sessions",
   requireWorkspaceRole(["teacher"]),
+  requireClassWorkspace,
   validate(createSessionSchema),
   async (req, res) => {
     const { workspaceId } = req.params;
@@ -71,6 +99,7 @@ router.post(
 router.delete(
   "/workspaces/:workspaceId/sessions/:sessionId",
   requireWorkspaceRole(["teacher"]),
+  requireClassWorkspace,
   async (req, res, next) => {
     const client = await pool.connect();
     try {
@@ -99,7 +128,8 @@ router.delete(
 router.get(
   "/workspaces/:workspaceId/measurements",
   requireWorkspaceRole(["teacher", "student"]),
-  async (req, res) => {
+  async (req, res, next) => {
+   try {
     const { workspaceId } = req.params;
     const {
       from,
@@ -112,8 +142,12 @@ router.get(
       offset = 0,
     } = req.query;
 
-    const values = [workspaceId];
-    const clauses = ["m.workspace_id = $1"];
+    const scope = await resolveWorkspaceScope(workspaceId);
+    if (!scope) return res.status(404).json({ error: "Workspace not found" });
+
+    const values = [];
+    const scoped = buildScopedDataFilter(scope, workspaceId, values);
+    const clauses = [...scoped.whereClauses];
 
     if (from) {
       values.push(from);
@@ -161,6 +195,7 @@ router.get(
         COALESCE(ed.latest_edits, '{}'::jsonb) AS edits
       FROM measurements m
       JOIN sessions s ON s.id = m.session_id
+      ${scoped.joinSql}
       LEFT JOIN LATERAL (
         SELECT jsonb_object_agg(t.field_name, t.payload) AS latest_edits
         FROM (
@@ -184,12 +219,16 @@ router.get(
     `;
     const result = await pool.query(query, values);
     res.json({ measurements: result.rows });
+   } catch (err) {
+    next(err);
+   }
   }
 );
 
 router.post(
   "/workspaces/:workspaceId/import/csv",
   requireWorkspaceRole(["teacher", "student"]),
+  requireClassWorkspace,
   validate(importCsvMeasurementsSchema),
   async (req, res, next) => {
     const client = await pool.connect();
@@ -290,6 +329,7 @@ router.post(
 router.delete(
   "/workspaces/:workspaceId/measurements",
   requireWorkspaceRole(["teacher"]),
+  requireClassWorkspace,
   async (req, res, next) => {
     const client = await pool.connect();
     try {
@@ -312,6 +352,7 @@ router.delete(
 router.post(
   "/workspaces/:workspaceId/measurements",
   requireWorkspaceRole(["teacher"]),
+  requireClassWorkspace,
   validate(createMeasurementSchema),
   async (req, res) => {
     const { workspaceId } = req.params;
@@ -345,6 +386,7 @@ router.post(
 router.patch(
   "/workspaces/:workspaceId/measurements/:measurementId",
   requireWorkspaceRole(["teacher"]),
+  requireClassWorkspace,
   validate(updateMeasurementSchema),
   async (req, res) => {
     const { measurementId, workspaceId } = req.params;
@@ -374,6 +416,7 @@ router.patch(
 router.post(
   "/workspaces/:workspaceId/measurements/:measurementId/edits",
   requireWorkspaceRole(["teacher", "student"]),
+  requireClassWorkspace,
   validate(addMeasurementEditSchema),
   async (req, res) => {
     const { workspaceId, measurementId } = req.params;
@@ -397,6 +440,47 @@ router.post(
     );
 
     res.status(201).json({ edit: result.rows[0] });
+  }
+);
+
+// Change how far a session's data reaches (school ↔ public). The class teacher may change any
+// session; a student may change only sessions they own (owner_student_code == their student_code).
+router.patch(
+  "/workspaces/:workspaceId/sessions/:sessionId/visibility",
+  requireWorkspaceRole(["teacher", "student"]),
+  requireClassWorkspace,
+  validate(updateSessionVisibilitySchema),
+  async (req, res, next) => {
+    try {
+      const { workspaceId, sessionId } = req.validated.params;
+      const { visibility } = req.validated.body;
+
+      const session = await pool.query(
+        `SELECT owner_student_code FROM sessions WHERE id = $1 AND workspace_id = $2`,
+        [sessionId, workspaceId]
+      );
+      if (!session.rowCount) return res.status(404).json({ error: "Session not found" });
+
+      if (req.workspaceRole !== "teacher") {
+        const profile = await pool.query(
+          `SELECT student_code FROM user_profiles WHERE user_id = $1 AND workspace_id = $2`,
+          [req.user.userId, workspaceId]
+        );
+        const myCode = profile.rows[0]?.student_code || "";
+        const ownerCode = session.rows[0].owner_student_code || "";
+        if (!ownerCode || ownerCode !== myCode) {
+          return res.status(403).json({ error: "Only the session owner can change its visibility" });
+        }
+      }
+
+      const updated = await pool.query(
+        `UPDATE sessions SET visibility = $1 WHERE id = $2 AND workspace_id = $3 RETURNING *`,
+        [visibility, sessionId, workspaceId]
+      );
+      res.json({ session: updated.rows[0] });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 

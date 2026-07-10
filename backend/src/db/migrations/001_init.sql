@@ -15,6 +15,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid_key ON users(firebase_uid);
 CREATE TABLE IF NOT EXISTS workspaces (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
+  -- 'class' = a user-created workspace (a class, or a general user's team; holds data).
+  -- 'school' = read-only aggregate view of one school's data (see 007_school_workspaces.sql).
+  -- 'public' = single read-only aggregate view of all public data.
+  kind TEXT NOT NULL DEFAULT 'class' CHECK (kind IN ('class', 'school', 'public')),
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -42,7 +46,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at TIMESTAMPTZ,
   ended_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  visibility TEXT NOT NULL DEFAULT 'group' CHECK (visibility IN ('public', 'school', 'group')), -- raw data session visibility
+  visibility TEXT NOT NULL DEFAULT 'school' CHECK (visibility IN ('public', 'school')), -- how far the data reaches: 'school' (its school) or 'public' (everyone)
   owner_student_code TEXT DEFAULT '' --identify owner of the session
 );
 

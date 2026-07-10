@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { fetchOpenAQDailyReference, fetchOpenAQHeatmapPoints } from "../../services/openaq.js";
+import { buildScopedDataFilter, resolveWorkspaceScope } from "../sensor/scope.js";
 
 const router = express.Router();
 
@@ -12,86 +13,116 @@ router.use(requireAuth);
 router.get(
   "/workspaces/:workspaceId/analytics/summary",
   requireWorkspaceRole(["teacher", "student"]),
-  async (req, res) => {
+  async (req, res, next) => {
+   try {
     const { workspaceId } = req.params;
     const { metric = "pm25", from, to } = req.query;
     if (!["pm25", "co", "temp", "humidity"].includes(metric)) {
       return res.status(400).json({ error: "Invalid metric" });
     }
-    const values = [workspaceId];
-    const where = ["workspace_id = $1"];
+    const scope = await resolveWorkspaceScope(workspaceId);
+    if (!scope) return res.status(404).json({ error: "Workspace not found" });
+
+    const values = [];
+    const scoped = buildScopedDataFilter(scope, workspaceId, values);
+    const where = [...scoped.whereClauses];
     if (from) {
       values.push(from);
-      where.push(`captured_at >= $${values.length}`);
+      where.push(`m.captured_at >= $${values.length}`);
     }
     if (to) {
       values.push(to);
-      where.push(`captured_at <= $${values.length}`);
+      where.push(`m.captured_at <= $${values.length}`);
     }
     const result = await pool.query(
       `SELECT
-        AVG(${metric}) AS mean,
-        MIN(${metric}) AS min,
-        MAX(${metric}) AS max,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${metric}) AS median,
-        STDDEV_POP(${metric}) AS stddev,
+        AVG(m.${metric}) AS mean,
+        MIN(m.${metric}) AS min,
+        MAX(m.${metric}) AS max,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY m.${metric}) AS median,
+        STDDEV_POP(m.${metric}) AS stddev,
         COUNT(*) AS sample_count
-      FROM measurements
+      FROM measurements m
+      JOIN sessions s ON s.id = m.session_id
+      ${scoped.joinSql}
       WHERE ${where.join(" AND ")}`,
       values
     );
 
     res.json({ metric, summary: result.rows[0] });
+   } catch (err) {
+    next(err);
+   }
   }
 );
 
 router.get(
   "/workspaces/:workspaceId/heatmap",
   requireWorkspaceRole(["teacher", "student"]),
-  async (req, res) => {
+  async (req, res, next) => {
+   try {
     const { workspaceId } = req.params;
     const { metric = "pm25" } = req.query;
     if (!["pm25", "co", "temp", "humidity"].includes(metric)) {
       return res.status(400).json({ error: "Invalid metric" });
     }
+    const scope = await resolveWorkspaceScope(workspaceId);
+    if (!scope) return res.status(404).json({ error: "Workspace not found" });
+
+    const values = [];
+    const scoped = buildScopedDataFilter(scope, workspaceId, values);
+    const where = [...scoped.whereClauses, "m.latitude IS NOT NULL", "m.longitude IS NOT NULL"];
     const result = await pool.query(
       `SELECT
-        ROUND(CAST(latitude AS numeric), 4) AS latitude,
-        ROUND(CAST(longitude AS numeric), 4) AS longitude,
-        AVG(${metric}) AS value,
+        ROUND(CAST(m.latitude AS numeric), 4) AS latitude,
+        ROUND(CAST(m.longitude AS numeric), 4) AS longitude,
+        AVG(m.${metric}) AS value,
         COUNT(*) AS point_count
-      FROM measurements
-      WHERE workspace_id = $1
-        AND latitude IS NOT NULL
-        AND longitude IS NOT NULL
+      FROM measurements m
+      JOIN sessions s ON s.id = m.session_id
+      ${scoped.joinSql}
+      WHERE ${where.join(" AND ")}
       GROUP BY 1, 2
       ORDER BY point_count DESC`,
-      [workspaceId]
+      values
     );
     res.json({ metric, points: result.rows });
+   } catch (err) {
+    next(err);
+   }
   }
 );
 
 router.get(
   "/workspaces/:workspaceId/export/measurements.csv",
   requireWorkspaceRole(["teacher", "student"]),
-  async (req, res) => {
+  async (req, res, next) => {
+   try {
     const { workspaceId } = req.params;
+    const scope = await resolveWorkspaceScope(workspaceId);
+    if (!scope) return res.status(404).json({ error: "Workspace not found" });
+
+    const values = [];
+    const scoped = buildScopedDataFilter(scope, workspaceId, values);
     const result = await pool.query(
       `SELECT
         m.id, m.captured_at, m.pm25, m.co, m.temp, m.humidity, m.latitude, m.longitude, m.indoor_outdoor,
         s.session_code, s.name AS session_name, s.school_code, s.instructor, s.period, s.group_code
       FROM measurements m
       JOIN sessions s ON s.id = m.session_id
-      WHERE m.workspace_id = $1
+      ${scoped.joinSql}
+      WHERE ${scoped.whereClauses.join(" AND ")}
       ORDER BY m.captured_at DESC`,
-      [workspaceId]
+      values
     );
 
     const csv = stringify(result.rows, { header: true });
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", "attachment; filename=measurements.csv");
     res.status(200).send(csv);
+   } catch (err) {
+    next(err);
+   }
   }
 );
 

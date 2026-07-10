@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
 import { firebaseAuth } from "../../config/firebase-admin.js";
 import { validate } from "../../middleware/validate.js";
+import { reconcileAggregateMemberships } from "./memberships.js";
 import {
   createInvitationsSchema,
   inviteTokenSchema,
@@ -11,6 +12,7 @@ import {
   registerSchema,
   resetStudentPasswordSchema,
   revokeInvitationSchema,
+  setWorkspaceSchoolSchema,
   updateClassStructureSchema,
   updateMyProfileSchema,
   updateStudentPlacementSchema,
@@ -175,6 +177,9 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       );
     }
 
+    // Auto-join the Public workspace (+ the class's school workspace, once a school is set).
+    await reconcileAggregateMemberships(client, user.id);
+
     await client.query("COMMIT");
     res.status(201).json({ ...makeUserResponse(user, workspaceId), role: membershipRole });
   } catch (error) {
@@ -204,10 +209,12 @@ router.get("/me", requireAuth, async (req, res) => {
   // One membership per workspace, each with its own profile. The client picks the
   // "current" workspace; the server has no notion of a selected workspace.
   const membershipResult = await pool.query(
-    `SELECT wm.workspace_id, w.name AS workspace_name, wm.role,
+    `SELECT wm.workspace_id, w.name AS workspace_name, w.kind AS workspace_kind,
+            w.school_id, sc.name AS school_name, wm.role,
             up.school_code, up.instructor, up.period, up.group_code, up.student_code
      FROM workspace_memberships wm
      JOIN workspaces w ON w.id = wm.workspace_id
+     LEFT JOIN schools sc ON sc.id = w.school_id
      LEFT JOIN user_profiles up ON up.user_id = wm.user_id AND up.workspace_id = wm.workspace_id
      WHERE wm.user_id = $1
      ORDER BY w.created_at`,
@@ -216,6 +223,9 @@ router.get("/me", requireAuth, async (req, res) => {
   const memberships = membershipResult.rows.map((row) => ({
     workspace_id: row.workspace_id,
     workspace_name: row.workspace_name,
+    kind: row.workspace_kind,
+    school_id: row.school_id,
+    school_name: row.school_name || "",
     role: row.role,
     profile: {
       workspace_id: row.workspace_id,
@@ -262,6 +272,65 @@ router.patch("/me/profile", requireAuth, validate(updateMyProfileSchema), async 
     next(err);
   }
 });
+
+// Teacher sets (or clears) the school their class belongs to. The class's members all move to the
+// matching school workspace together, so we reconcile every member's aggregate memberships.
+router.patch(
+  "/workspaces/:workspaceId/school",
+  requireAuth,
+  requireWorkspaceRole(["teacher"]),
+  validate(setWorkspaceSchoolSchema),
+  async (req, res, next) => {
+    const client = await pool.connect();
+    try {
+      const { workspaceId } = req.validated.params;
+      const { schoolId } = req.validated.body;
+
+      await client.query("BEGIN");
+      const ws = await client.query(
+        `SELECT kind FROM workspaces WHERE id = $1 FOR UPDATE`,
+        [workspaceId]
+      );
+      if (!ws.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Workspace not found" });
+      }
+      if (ws.rows[0].kind !== "class") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Only a class workspace can have a school" });
+      }
+      if (schoolId) {
+        const school = await client.query(`SELECT 1 FROM schools WHERE id = $1`, [schoolId]);
+        if (!school.rowCount) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Unknown school" });
+        }
+      }
+
+      const updated = await client.query(
+        `UPDATE workspaces SET school_id = $1 WHERE id = $2
+         RETURNING id, name, kind, school_id`,
+        [schoolId, workspaceId]
+      );
+
+      const members = await client.query(
+        `SELECT user_id FROM workspace_memberships WHERE workspace_id = $1`,
+        [workspaceId]
+      );
+      for (const { user_id } of members.rows) {
+        await reconcileAggregateMemberships(client, user_id);
+      }
+
+      await client.query("COMMIT");
+      res.json({ workspace: updated.rows[0] });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      next(err);
+    } finally {
+      client.release();
+    }
+  }
+);
 
 // Unauthenticated: the /join/<token> landing page shows what the invitee is joining
 // before they have an account.
@@ -315,6 +384,7 @@ router.post(
            WHERE id = $2`,
           [req.user.userId, invite.id]
         );
+        await reconcileAggregateMemberships(client, req.user.userId);
         await client.query("COMMIT");
         return res.status(200).json({
           alreadyMember: true,
@@ -346,6 +416,7 @@ router.post(
          WHERE id = $2`,
         [req.user.userId, invite.id]
       );
+      await reconcileAggregateMemberships(client, req.user.userId);
       await client.query("COMMIT");
       res.status(201).json({
         workspace,
@@ -597,6 +668,8 @@ router.delete(
       await client.query("BEGIN");
       await client.query(`DELETE FROM user_profiles WHERE workspace_id = $1 AND user_id = $2`, [workspaceId, userId]);
       await client.query(`DELETE FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2`, [workspaceId, userId]);
+      // Removing them from this class may drop their last tie to its school workspace.
+      await reconcileAggregateMemberships(client, userId);
       await client.query("COMMIT");
       res.status(204).send();
     } catch (error) {

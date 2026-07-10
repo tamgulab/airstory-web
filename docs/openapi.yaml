@@ -126,6 +126,16 @@ components:
           type: string
           format: date-time
 
+    School:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Lincoln High School
+
     ClassStructure:
       type: object
       properties:
@@ -382,6 +392,35 @@ paths:
                   environment:
                     type: string
                     enum: [development, production]
+
+  # ── Schools ───────────────────────────────────────────────────────────────
+
+  /schools:
+    get:
+      tags: [Schools]
+      summary: List schools from the internal directory
+      description: >
+        Backs the account-settings school picker. Optional `q` filters by name
+        (case-insensitive substring); otherwise the full directory is returned.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Case-insensitive substring filter on the school name
+      responses:
+        '200':
+          description: School directory
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schools:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/School'
 
   # ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -1810,6 +1849,8 @@ tags:
     description: Service health check
   - name: Auth
     description: User authentication, profiles, workspace membership, and invitations
+  - name: Schools
+    description: Internal school directory
   - name: Sessions
     description: Data collection sessions within a workspace
   - name: Measurements

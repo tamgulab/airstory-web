@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { User, Settings, HelpCircle, Shield, LogOut, Edit2, Save, X } from 'lucide-react';
 import { getMe, getRoster, changePassword, updateMyProfile } from '../api/auth';
+import { getSchools } from '../api/schools';
 import { periodsFromClassStructure } from '../utils/classStructure';
+import SchoolCombobox from './SchoolCombobox';
 
 const MyPage = ({
   workspaceId,
@@ -32,6 +34,7 @@ const MyPage = ({
   const [schoolBusy, setSchoolBusy] = useState(false);
   const [schoolError, setSchoolError] = useState('');
   const [schoolSaved, setSchoolSaved] = useState(false);
+  const [schoolOptions, setSchoolOptions] = useState([]);
 
   const profileInitials = () => {
     const name = (viewerProfile.displayName || me?.user?.full_name || '').trim();
@@ -81,6 +84,22 @@ const MyPage = ({
     setSchoolInput(viewerProfile.school || filters.school || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerProfile.school]);
+
+  // Pull the internal school directory for the picker (teachers only edit the school).
+  useEffect(() => {
+    if (!isTeacherRole) return undefined;
+    let cancelled = false;
+    getSchools()
+      .then((data) => {
+        if (!cancelled) setSchoolOptions((data.schools || []).map((s) => s.name));
+      })
+      .catch(() => {
+        // Directory unavailable — the combobox still accepts free text.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isTeacherRole]);
 
   // When navigated here via the Manage Classes "Edit" link, scroll to and focus the school field.
   useEffect(() => {
@@ -172,7 +191,7 @@ const MyPage = ({
     setSchoolBusy(true);
     try {
       const value = schoolInput.trim();
-      await updateMyProfile({ schoolCode: value });
+      await updateMyProfile(workspaceId, { schoolCode: value });
       setFilters({ ...filters, school: value });
       setSchoolSaved(true);
       await onProfileSaved?.();
@@ -317,13 +336,13 @@ const MyPage = ({
                     School
                   </label>
                   <div className="flex gap-2">
-                    <input
+                    <SchoolCombobox
                       id="school-input"
-                      type="text"
                       value={schoolInput}
-                      onChange={(e) => { setSchoolInput(e.target.value); setSchoolSaved(false); }}
-                      placeholder="Enter your school name"
-                      className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      onChange={(v) => { setSchoolInput(v); setSchoolSaved(false); }}
+                      options={schoolOptions}
+                      placeholder="Search or select your school"
+                      inputClassName="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                     <button
                       type="button"

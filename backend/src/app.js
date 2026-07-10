@@ -6,6 +6,7 @@ import authRoutes from "./modules/auth/auth.routes.js";
 import sensorRoutes from "./modules/sensor/sensor.routes.js";
 import analyticsRoutes from "./modules/analytics/analytics.routes.js";
 import sheetsRoutes from "./modules/sheets/sheets.routes.js";
+import schoolsRoutes from "./modules/schools/schools.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
 
 export function createApp() {
@@ -40,6 +41,7 @@ export function createApp() {
   app.use("/api", sensorRoutes);
   app.use("/api", analyticsRoutes);
   app.use("/api", sheetsRoutes);
+  app.use("/api", schoolsRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

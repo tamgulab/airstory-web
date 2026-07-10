@@ -209,6 +209,25 @@ const MyPage = ({
     }
   };
 
+  // Detach the class from its school: members leave the school workspace and its data stops
+  // surfacing there (they keep Public). This is the school-less / general-user state.
+  const handleRemoveSchool = async () => {
+    setSchoolError('');
+    setSchoolSaved(false);
+    setSchoolBusy(true);
+    try {
+      await setWorkspaceSchool(workspaceId, null);
+      setSchoolInput('');
+      setFilters({ ...filters, school: '' });
+      setSchoolSaved(true);
+      await onProfileSaved?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not remove school.');
+    } finally {
+      setSchoolBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -359,14 +378,28 @@ const MyPage = ({
                     >
                       {schoolBusy ? 'Saving…' : 'Save'}
                     </button>
+                    {(viewerProfile.school || filters.school) && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveSchool}
+                        disabled={schoolBusy}
+                        className="shrink-0 px-4 py-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                   {schoolError ? (
                     <p className="text-xs text-red-600 mt-1">{schoolError}</p>
                   ) : schoolSaved ? (
-                    <p className="text-xs text-green-600 mt-1">School saved. Everyone in this class now shares its school workspace.</p>
+                    <p className="text-xs text-green-600 mt-1">
+                      {(viewerProfile.school || filters.school)
+                        ? 'School saved. Everyone in this class now shares its school workspace.'
+                        : 'School removed. This class is no longer part of a school workspace.'}
+                    </p>
                   ) : (
                     <p className="text-xs text-gray-500 mt-1">
-                      Sets the school for this whole class — its members join the school workspace and its data reaches other classes at this school.
+                      Sets the school for this whole class — its members join the school workspace and its data reaches other classes at this school. Use Remove to detach it.
                     </p>
                   )}
                 </div>

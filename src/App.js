@@ -196,6 +196,9 @@ export default function App() {
       setMemberships(nextMemberships);
       const membership = pickMembership(nextMemberships);
       const profile = membership?.profile || null;
+      // School is a per-class property (workspaces.school_id → membership.school_name), not the
+      // per-workspace profile, so read it from the membership.
+      const schoolName = membership?.school_name || "";
       const nextRole = membership?.role || userRole || "student";
       const isTeacherRole = nextRole === "teacher";
       // On a fresh page load there is no persisted workspace id (Firebase only restores identity),
@@ -208,7 +211,7 @@ export default function App() {
       setViewerProfile((prev) => ({
         ...prev,
         displayName: me?.user?.full_name || prev.displayName,
-        school: profile?.school_code || "",
+        school: schoolName,
         instructor: profile?.instructor || "",
         period: profile?.period || "",
         group: profile?.group_code || "",
@@ -217,7 +220,7 @@ export default function App() {
       if (isTeacherRole) {
         setFilters((prev) => ({
           ...prev,
-          school: profile?.school_code != null && profile.school_code !== "" ? profile.school_code : prev.school,
+          school: schoolName,
           instructor:
             profile?.instructor != null && profile.instructor !== "" ? profile.instructor : prev.instructor,
           period: profile?.period != null && profile.period !== "" ? profile.period : prev.period,
@@ -226,7 +229,7 @@ export default function App() {
       }
       if (!isTeacherRole) {
         const profileSnap = [
-          profile?.school_code || "",
+          schoolName,
           profile?.instructor || "",
           profile?.period || "",
           profile?.group_code || "",
@@ -244,7 +247,7 @@ export default function App() {
           lastProfileHierarchySnapRef.current = profileSnap;
           setFilters((prev) => ({
             ...prev,
-            school: profile?.school_code || "",
+            school: schoolName,
             instructor: profile?.instructor || "",
             period: profile?.period || "",
             group: profile?.group_code || "",
@@ -515,11 +518,12 @@ export default function App() {
     clearImportedMeasurements();
     setImportedDataVersion((v) => v + 1);
     const profile = membership.profile || null;
+    const schoolName = membership.school_name || "";
     setWorkspaceId(nextWorkspaceId);
     setUserRole(membership.role);
     setViewerProfile((prev) => ({
       ...prev,
-      school: profile?.school_code || "",
+      school: schoolName,
       instructor: profile?.instructor || "",
       period: profile?.period || "",
       group: profile?.group_code || "",
@@ -527,7 +531,7 @@ export default function App() {
     }));
     setFilters((prev) => ({
       ...prev,
-      school: profile?.school_code || "",
+      school: schoolName,
       instructor: profile?.instructor || "",
       period: profile?.period || "",
       group: profile?.group_code || "",
@@ -607,10 +611,22 @@ export default function App() {
   const currentMembership = memberships.find((m) => m.workspace_id === workspaceId) || null;
   const currentWorkspaceKind = currentMembership?.kind || "class";
   const isReadOnlyWorkspace = currentWorkspaceKind !== "class";
-  const workspaceSwitcherLabel = (m) => {
-    if (m.kind === "public") return "🌐 Public";
-    if (m.kind === "school") return `🏫 ${m.school_name || m.workspace_name || "School"}`;
+  // Full name shown on hover in the sidebar tooltip.
+  const workspaceFullName = (m) => {
+    if (m.kind === "public") return "Public";
+    if (m.kind === "school") return m.school_name || m.workspace_name || "School";
     return m.workspace_name || "Workspace";
+  };
+
+  // Sidebar icon: emoji for the aggregate workspaces, up to two initials for a class.
+  const workspaceIcon = (m) => {
+    if (m.kind === "public") return "🌐";
+    if (m.kind === "school") return "🏫";
+    const name = (m.workspace_name || "").trim();
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return "WS";
   };
 
   const teacherNavInitials = () => {
@@ -738,9 +754,44 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Slack-style vertical workspace switcher */}
+      {!isPublicMode && memberships.length > 0 && (
+        <aside className="sticky top-0 h-screen w-20 shrink-0 bg-slate-900 flex flex-col items-center gap-3 py-4 overflow-y-auto z-50">
+          {memberships.map((m) => {
+            const active = m.workspace_id === workspaceId;
+            return (
+              <button
+                key={m.workspace_id}
+                type="button"
+                onClick={() => switchWorkspace(m.workspace_id)}
+                className="group relative flex items-center justify-center"
+                aria-label={workspaceFullName(m)}
+                aria-current={active ? "true" : undefined}
+              >
+                <span
+                  className={`flex items-center justify-center w-12 h-12 rounded-full text-sm font-bold transition-all ${
+                    active
+                      ? "bg-blue-600 text-white ring-2 ring-white shadow-lg"
+                      : "bg-slate-700 text-slate-100 hover:bg-blue-600"
+                  }`}
+                >
+                  {workspaceIcon(m)}
+                </span>
+                {/* Hover tooltip with the full workspace name */}
+                <span className="pointer-events-none absolute left-full ml-3 z-50 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                  {workspaceFullName(m)}
+                </span>
+              </button>
+            );
+          })}
+        </aside>
+      )}
+
+      {/* Right column: top nav + main content */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
       {/* Top Navigation Bar */}
-      <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-50">
+      <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex items-center justify-between h-20">
             {/* Logo and Brand */}
@@ -799,21 +850,6 @@ export default function App() {
             {/* User Info - Only show if not in public mode */}
             {!isPublicMode && (
               <div className="flex items-center gap-4">
-                {memberships.length > 1 && (
-                  <select
-                    value={workspaceId}
-                    onChange={(e) => switchWorkspace(e.target.value)}
-                    className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white text-gray-700 max-w-[180px]"
-                    aria-label="Switch workspace"
-                    title="Switch workspace"
-                  >
-                    {memberships.map((m) => (
-                      <option key={m.workspace_id} value={m.workspace_id}>
-                        {workspaceSwitcherLabel(m)}
-                      </option>
-                    ))}
-                  </select>
-                )}
                 <div className="text-right hidden lg:block">
                   <p className="text-sm font-medium text-gray-900">
                     {isTeacher ? (viewerProfile.instructor || "Instructor") : (viewerProfile.studentId || filters.studentId)}
@@ -916,6 +952,7 @@ export default function App() {
           <p>&copy; 2026 Air Story. All rights reserved.</p>
         </div>
       </footer>
+      </div>
     </div>
   );
 }

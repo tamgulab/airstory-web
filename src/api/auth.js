@@ -46,33 +46,14 @@ export async function loginWithGoogle() {
  * it only POSTs /auth/register with the existing ID token. On failure the caller stays signed in
  * to Firebase and can retry; we sign out rather than delete the federated account.
  */
-export async function completeRegistration({
-  email,
-  fullName,
-  workspaceName,
-  role,
-  schoolCode,
-  instructor,
-  period,
-  groupCode,
-  studentCode,
-  joinWorkspaceId,
-  joinCode,
-}) {
+export async function completeRegistration({ email, fullName, workspaceName, inviteToken }) {
   return apiRequest("/auth/register", {
     method: "POST",
     body: JSON.stringify({
       email: String(email || "").trim().toLowerCase(),
       fullName,
-      workspaceName: workspaceName || "Default Workspace",
-      role: role || "student",
-      schoolCode: schoolCode || "",
-      instructor: instructor || "",
-      period: period || "",
-      groupCode: groupCode || "",
-      studentCode: studentCode || "",
-      joinWorkspaceId,
-      joinCode: joinCode || undefined,
+      workspaceName: workspaceName || undefined,
+      inviteToken: inviteToken || undefined,
     }),
   });
 }
@@ -90,24 +71,12 @@ export async function changePassword(email, newPassword) {
   await updatePassword(user, newPassword);
 }
 
-export async function register({
-  email,
-  password,
-  fullName,
-  workspaceName,
-  role,
-  schoolCode,
-  instructor,
-  period,
-  groupCode,
-  studentCode,
-  joinWorkspaceId,
-  joinCode,
-}) {
+export async function register({ email, password, fullName, workspaceName, inviteToken }) {
   const normalizedEmail = String(email || "")
     .trim()
     .toLowerCase();
-  // Create the Firebase identity first, then provision the app account (workspace/profile/role).
+  // Create the Firebase identity first, then provision the app account. Exactly one of
+  // workspaceName (create a workspace, become its teacher) or inviteToken (join by invitation).
   const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
   try {
     return await apiRequest("/auth/register", {
@@ -115,19 +84,12 @@ export async function register({
       body: JSON.stringify({
         email: normalizedEmail,
         fullName,
-        workspaceName: workspaceName || "Default Workspace",
-        role: role || "student",
-        schoolCode: schoolCode || "",
-        instructor: instructor || "",
-        period: period || "",
-        groupCode: groupCode || "",
-        studentCode: studentCode || "",
-        joinWorkspaceId,
-        joinCode: joinCode || undefined,
+        workspaceName: workspaceName || undefined,
+        inviteToken: inviteToken || undefined,
       }),
     });
   } catch (err) {
-    // Backend provisioning failed (e.g. invalid join code) — remove the orphaned Firebase
+    // Backend provisioning failed (e.g. expired invitation) — remove the orphaned Firebase
     // account so the email is free and the user can retry cleanly.
     try {
       await cred.user.delete();
@@ -142,9 +104,9 @@ export async function getMe() {
   return apiRequest("/auth/me");
 }
 
-/** Persist school code, class (instructor) name, period, group on the signed-in user's profile. */
-export async function updateMyProfile({ schoolCode, instructor, period, groupCode } = {}) {
-  const body = {};
+/** Persist school code, class (instructor) name, period, group on the signed-in user's profile in one workspace. */
+export async function updateMyProfile(workspaceId, { schoolCode, instructor, period, groupCode } = {}) {
+  const body = { workspaceId };
   if (schoolCode !== undefined) body.schoolCode = schoolCode;
   if (instructor !== undefined) body.instructor = instructor;
   if (period !== undefined) body.period = period;
@@ -155,23 +117,50 @@ export async function updateMyProfile({ schoolCode, instructor, period, groupCod
   });
 }
 
+/** Teacher: set (schoolId) or clear (null) the school this class workspace belongs to. */
+export async function setWorkspaceSchool(workspaceId, schoolId) {
+  return apiRequest(`/auth/workspaces/${workspaceId}/school`, {
+    method: "PATCH",
+    body: JSON.stringify({ schoolId: schoolId || null }),
+  });
+}
+
 export async function getRoster(workspaceId) {
   return apiRequest(`/auth/workspaces/${workspaceId}/roster`);
 }
 
-export async function getJoinCodes(workspaceId) {
-  return apiRequest(`/auth/workspaces/${workspaceId}/join-codes`);
-}
-
-export async function createJoinCode(workspaceId, body) {
-  return apiRequest(`/auth/workspaces/${workspaceId}/join-codes`, {
+/** Teacher: invite people by email. Returns { invitations, skipped }; links are composed client-side. */
+export async function createInvitations(workspaceId, { emails, role, period }) {
+  return apiRequest(`/auth/workspaces/${workspaceId}/invitations`, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ emails, role, period: period || "" }),
   });
 }
 
-export async function getJoinCodeConfig(code) {
-  return apiRequest(`/auth/join-code/${encodeURIComponent(String(code || "").toUpperCase())}/config`);
+export async function getInvitations(workspaceId) {
+  return apiRequest(`/auth/workspaces/${workspaceId}/invitations`);
+}
+
+export async function revokeInvitation(workspaceId, invitationId) {
+  return apiRequest(`/auth/workspaces/${workspaceId}/invitations/${invitationId}`, {
+    method: "DELETE",
+  });
+}
+
+/** Unauthenticated preview for the /join/<token> landing page. */
+export async function getInvitePreview(token) {
+  return apiRequest(`/auth/invitations/${encodeURIComponent(token)}`);
+}
+
+/** Signed-in user accepts an invitation into an additional workspace. */
+export async function acceptInvitation(token) {
+  return apiRequest(`/auth/invitations/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+  });
+}
+
+export function buildInviteLink(token) {
+  return `${window.location.origin}/join/${token}`;
 }
 
 export async function getClassStructure(workspaceId) {
@@ -182,13 +171,6 @@ export async function updateClassStructure(workspaceId, body) {
   return apiRequest(`/auth/workspaces/${workspaceId}/class-structure`, {
     method: "PATCH",
     body: JSON.stringify(body),
-  });
-}
-
-export async function setJoinCodeActive(workspaceId, codeId, active) {
-  return apiRequest(`/auth/workspaces/${workspaceId}/join-codes/${codeId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ active }),
   });
 }
 

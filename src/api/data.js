@@ -25,6 +25,14 @@ export function importCsvMeasurements(workspaceId, rows = []) {
   });
 }
 
+/** Owner/teacher: change how far a session's data reaches ('school' | 'public'). */
+export function setSessionVisibility(workspaceId, sessionId, visibility) {
+  return apiRequest(`/workspaces/${workspaceId}/sessions/${sessionId}/visibility`, {
+    method: "PATCH",
+    body: JSON.stringify({ visibility }),
+  });
+}
+
 export function clearWorkspaceMeasurements(workspaceId) {
   return apiRequest(`/workspaces/${workspaceId}/measurements`, {
     method: "DELETE",

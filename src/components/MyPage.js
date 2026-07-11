@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { User, Settings, HelpCircle, Shield, LogOut, Edit2, Save, X } from 'lucide-react';
-import { getMe, getRoster, changePassword, updateMyProfile } from '../api/auth';
+import { getMe, getRoster, changePassword, updateMyProfile, setWorkspaceSchool } from '../api/auth';
+import { getSchools } from '../api/schools';
 import { periodsFromClassStructure } from '../utils/classStructure';
+import SchoolCombobox from './SchoolCombobox';
 
 const MyPage = ({
   workspaceId,
@@ -13,6 +15,8 @@ const MyPage = ({
   onLogout,
   classStructure,
   onProfileSaved,
+  focusSchoolSignal = 0,
+  schoolEditable = false, // teacher of a class workspace: the school is a per-class setting
 }) => {
   const isTeacherRole = userRole === 'teacher';
   const [isEditing, setIsEditing] = useState(false);
@@ -27,6 +31,11 @@ const MyPage = ({
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState('');
   const [profileSaveBusy, setProfileSaveBusy] = useState(false);
+  const [schoolInput, setSchoolInput] = useState(viewerProfile.school || filters.school || '');
+  const [schoolBusy, setSchoolBusy] = useState(false);
+  const [schoolError, setSchoolError] = useState('');
+  const [schoolSaved, setSchoolSaved] = useState(false);
+  const [schoolOptions, setSchoolOptions] = useState([]);
 
   const profileInitials = () => {
     const name = (viewerProfile.displayName || me?.user?.full_name || '').trim();
@@ -69,6 +78,41 @@ const MyPage = ({
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // Load the saved school into the editable field; updates after a save/profile sync.
+  // filters.school is intentionally omitted from deps to avoid clobbering the input while typing.
+  useEffect(() => {
+    setSchoolInput(viewerProfile.school || filters.school || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerProfile.school]);
+
+  // Pull the internal school directory for the picker (only a class teacher edits the school).
+  useEffect(() => {
+    if (!schoolEditable) return undefined;
+    let cancelled = false;
+    getSchools()
+      .then((data) => {
+        if (!cancelled) setSchoolOptions(data.schools || []);
+      })
+      .catch(() => {
+        // Directory unavailable — nothing to pick from.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [schoolEditable]);
+
+  // When navigated here via the Manage Classes "Edit" link, scroll to and focus the school field.
+  useEffect(() => {
+    if (!focusSchoolSignal) return;
+    const raf = requestAnimationFrame(() => {
+      const section = document.getElementById('school-setting');
+      const input = document.getElementById('school-input');
+      section?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      input?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusSchoolSignal]);
 
   const periodEditOptions = useMemo(() => {
     const p = periodsFromClassStructure(classStructure);
@@ -121,7 +165,7 @@ const MyPage = ({
     setProfileSaveError('');
     setProfileSaveBusy(true);
     try {
-      await updateMyProfile({
+      await updateMyProfile(workspaceId, {
         schoolCode: tempFilters.school,
         instructor: tempFilters.instructor,
         period: tempFilters.period,
@@ -140,6 +184,48 @@ const MyPage = ({
   const handleCancel = () => {
     setTempFilters({ ...filters });
     setIsEditing(false);
+  };
+
+  const handleSaveSchool = async () => {
+    setSchoolError('');
+    setSchoolSaved(false);
+    const value = schoolInput.trim();
+    // School now maps a class to its school workspace, so it must be a directory entry (not free text).
+    const match = schoolOptions.find((s) => s.name.toLowerCase() === value.toLowerCase());
+    if (!match) {
+      setSchoolError('Pick a school from the list.');
+      return;
+    }
+    setSchoolBusy(true);
+    try {
+      await setWorkspaceSchool(workspaceId, match.id);
+      setFilters({ ...filters, school: match.name });
+      setSchoolSaved(true);
+      await onProfileSaved?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not save school.');
+    } finally {
+      setSchoolBusy(false);
+    }
+  };
+
+  // Detach the class from its school: members leave the school workspace and its data stops
+  // surfacing there (they keep Public). This is the school-less / general-user state.
+  const handleRemoveSchool = async () => {
+    setSchoolError('');
+    setSchoolSaved(false);
+    setSchoolBusy(true);
+    try {
+      await setWorkspaceSchool(workspaceId, null);
+      setSchoolInput('');
+      setFilters({ ...filters, school: '' });
+      setSchoolSaved(true);
+      await onProfileSaved?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not remove school.');
+    } finally {
+      setSchoolBusy(false);
+    }
   };
 
   return (
@@ -270,6 +356,55 @@ const MyPage = ({
             </div>
 
             <div className="space-y-4">
+              {schoolEditable && (
+                <div id="school-setting">
+                  <label htmlFor="school-input" className="block text-sm font-semibold text-gray-700 mb-2">
+                    School
+                  </label>
+                  <div className="flex gap-2">
+                    <SchoolCombobox
+                      id="school-input"
+                      value={schoolInput}
+                      onChange={(v) => { setSchoolInput(v); setSchoolSaved(false); }}
+                      options={schoolOptions.map((s) => s.name)}
+                      placeholder="Search or select your school"
+                      inputClassName="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveSchool}
+                      disabled={schoolBusy}
+                      className={`shrink-0 px-4 py-2 ${theme.bg} ${theme.hover} text-white font-medium rounded-lg transition-colors disabled:opacity-50`}
+                    >
+                      {schoolBusy ? 'Saving…' : 'Save'}
+                    </button>
+                    {(viewerProfile.school || filters.school) && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveSchool}
+                        disabled={schoolBusy}
+                        className="shrink-0 px-4 py-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  {schoolError ? (
+                    <p className="text-xs text-red-600 mt-1">{schoolError}</p>
+                  ) : schoolSaved ? (
+                    <p className="text-xs text-green-600 mt-1">
+                      {(viewerProfile.school || filters.school)
+                        ? 'School saved. Everyone in this class now shares its school workspace.'
+                        : 'School removed. This class is no longer part of a school workspace.'}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Sets the school for this whole class — its members join the school workspace and its data reaches other classes at this school. Use Remove to detach it.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   {isTeacherRole ? 'Instructor / staff ID' : 'Student ID'}
@@ -388,7 +523,7 @@ const MyPage = ({
                 <strong className="text-gray-900">Version:</strong> 1.0.0
               </p>
               <p>
-                <strong className="text-gray-900">Last Updated:</strong> November 2025
+                <strong className="text-gray-900">Last Updated:</strong> June 25, 2026
               </p>
               <p>
                 Air Story is a comprehensive air quality monitoring platform designed for schools and communities.
@@ -442,6 +577,7 @@ const MyPage = ({
                   onChange={(e) => setTempFilters({ ...tempFilters, state: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
+                  <option value="">Not set</option>
                   <option value="PA">Pennsylvania</option>
                   <option value="NY">New York</option>
                   <option value="CA">California</option>

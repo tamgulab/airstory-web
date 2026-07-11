@@ -1,41 +1,40 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowRight, GraduationCap, Users } from 'lucide-react';
-import { getJoinCodeConfig } from '../api/auth';
+import { getInvitePreview } from '../api/auth';
 
 /**
  * First-time onboarding for a user who just signed in (e.g. with Google) but has no app account
- * yet. They confirm their name and pick a role:
- *  - Teacher: name only -> creates a new workspace.
- *  - Student: enters a teacher's join code -> the code fixes their class period; the teacher
- *    assigns their group later. The student never picks a period or group here.
+ * yet. There are no standalone accounts:
+ *  - With an invite token: they join the inviting workspace (role comes from the invitation),
+ *    so they only confirm their name.
+ *  - Without one: they name a new workspace and become its teacher.
  */
-const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, submitting, error }) => {
+const OnboardingForm = ({ defaultName = '', email = '', inviteToken = '', onSubmit, onCancel, submitting, error }) => {
   const [fullName, setFullName] = useState(defaultName);
-  const [role, setRole] = useState('student');
-  const [joinCode, setJoinCode] = useState('');
-  const [joinConfig, setJoinConfig] = useState(null);
-  const [checking, setChecking] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [invitePreview, setInvitePreview] = useState(null);
+  const [inviteError, setInviteError] = useState('');
   const [localError, setLocalError] = useState('');
 
-  const codeValid = /^[A-Z0-9]{5}$/.test(joinCode.trim().toUpperCase());
+  useEffect(() => {
+    if (!inviteToken) return undefined;
+    let cancelled = false;
+    getInvitePreview(inviteToken)
+      .then((data) => {
+        if (!cancelled) setInvitePreview(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setInviteError(e.message || 'This invite link is not valid.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
-  const verifyCode = async () => {
-    setLocalError('');
-    if (!codeValid) {
-      setLocalError('Join code must be exactly 5 letters/numbers.');
-      return;
-    }
-    setChecking(true);
-    try {
-      const config = await getJoinCodeConfig(joinCode.trim().toUpperCase());
-      setJoinConfig(config);
-    } catch (e) {
-      setJoinConfig(null);
-      setLocalError(e.message || 'Invalid join code.');
-    } finally {
-      setChecking(false);
-    }
-  };
+  const joining = Boolean(inviteToken);
+  const emailMismatch =
+    joining && invitePreview && email &&
+    String(invitePreview.email).toLowerCase() !== email.toLowerCase();
 
   const handleSubmit = () => {
     setLocalError('');
@@ -43,20 +42,13 @@ const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, subm
       setLocalError('Please enter your full name.');
       return;
     }
-    if (role === 'student') {
-      if (!codeValid) {
-        setLocalError('Enter the join code from your teacher.');
-        return;
-      }
-      if (!joinConfig) {
-        setLocalError('Please verify your join code first.');
-        return;
-      }
+    if (!joining && workspaceName.trim().length < 2) {
+      setLocalError('Please name your workspace (e.g. "Lincoln High – Ms. Rivera").');
+      return;
     }
     onSubmit({
       fullName: fullName.trim(),
-      role,
-      joinCode: role === 'student' ? joinCode.trim().toUpperCase() : undefined,
+      workspaceName: joining ? undefined : workspaceName.trim(),
     });
   };
 
@@ -67,65 +59,57 @@ const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, subm
     <div className="w-full max-w-md mx-auto bg-white rounded-3xl p-8 shadow-2xl space-y-6 animate-in zoom-in-95 duration-200">
       <div className="text-center">
         <div className="mx-auto w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 text-blue-600">
-          {role === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
+          {joining && invitePreview?.role === 'student' ? <GraduationCap size={40} /> : <Users size={40} />}
         </div>
         <h2 className="text-2xl font-black text-gray-900">Finish setting up</h2>
         <p className="text-gray-500 font-medium mt-1">
-          {email ? `Signed in as ${email}. ` : ''}Tell us who you are.
+          {email ? `Signed in as ${email}. ` : ''}
+          {joining ? '' : "You'll create a workspace and can invite others."}
         </p>
       </div>
 
+      {joining && invitePreview && !emailMismatch && (
+        <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-3">
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">You've been invited</p>
+          <p className="text-lg font-black text-blue-700">
+            {invitePreview.workspaceName} · {invitePreview.role === 'teacher' ? 'Teacher' : 'Student'}
+          </p>
+          {invitePreview.period && (
+            <p className="text-xs text-gray-500 font-medium mt-1">Period {invitePreview.period}</p>
+          )}
+        </div>
+      )}
+
+      {joining && emailMismatch && (
+        <p className="text-sm text-red-600 text-center font-medium">
+          This invitation was sent to {invitePreview.email}, but you are signed in as {email}.
+          Sign out and continue with the invited email.
+        </p>
+      )}
+
+      {joining && inviteError && (
+        <p className="text-sm text-red-600 text-center font-medium">{inviteError}</p>
+      )}
+
       <div className="space-y-4">
         <div className="space-y-2">
-          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
+          <label className="text-xs font-bold text-black uppercase tracking-widest ml-1">Full Name</label>
           <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} className={inputClass} />
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">I am a…</label>
-          <div className="grid grid-cols-2 gap-3">
-            {['student', 'teacher'].map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => { setRole(r); setLocalError(''); }}
-                className={`py-3 rounded-2xl font-bold text-sm capitalize transition-all border-2 ${
-                  role === r ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {role === 'student' && (
+        {!joining && (
           <div className="space-y-2">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Join Code</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={joinCode}
-                onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setJoinConfig(null); }}
-                placeholder="5-letter/number class code"
-                maxLength={5}
-                className={`${inputClass} tracking-wider uppercase`}
-              />
-              <button
-                type="button"
-                onClick={verifyCode}
-                disabled={!codeValid || checking}
-                className="shrink-0 px-4 rounded-2xl font-bold text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50"
-              >
-                {checking ? '…' : 'Verify'}
-              </button>
-            </div>
-            {joinConfig && (
-              <p className="text-sm text-green-600 font-semibold ml-1">
-                Joining {joinConfig.instructor ? `${joinConfig.instructor}'s class` : 'class'}
-                {joinConfig.period ? ` · Period ${joinConfig.period}` : ''}. Your teacher will assign your group.
-              </p>
-            )}
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Workspace Name</label>
+            <input
+              type="text"
+              value={workspaceName}
+              onChange={(e) => setWorkspaceName(e.target.value)}
+              placeholder='e.g. "Lincoln High – Ms. Rivera"'
+              className={inputClass}
+            />
+            <p className="text-xs text-gray-500 font-medium ml-1">
+              Joining a class instead? Use the invite link your teacher shared.
+            </p>
           </div>
         )}
       </div>
@@ -133,7 +117,7 @@ const OnboardingForm = ({ defaultName = '', email = '', onSubmit, onCancel, subm
       <button
         type="button"
         onClick={handleSubmit}
-        disabled={submitting}
+        disabled={submitting || Boolean(emailMismatch) || (joining && !invitePreview)}
         className="w-full py-4 text-lg rounded-xl font-bold flex items-center justify-center gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-md active:scale-95 transition-all disabled:opacity-60"
       >
         {submitting ? 'Setting up…' : 'Create my account'}

@@ -1036,7 +1036,7 @@ const HeatMapDashboard = ({
                     </p>
                   </div>
                   <div className="text-right shrink-0">
-                    <span className="text-2xl font-semibold text-green-600">{bestLocation[selectedMetric]}</span>
+                    <span className="text-2xl font-semibold text-green-600">{Number(bestLocation[selectedMetric]).toFixed(2)}</span>
                     <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
                   </div>
                 </div>
@@ -1057,7 +1057,7 @@ const HeatMapDashboard = ({
                     </p>
                   </div>
                   <div className="text-right shrink-0">
-                    <span className="text-2xl font-semibold text-orange-600">{worstLocation[selectedMetric]}</span>
+                    <span className="text-2xl font-semibold text-orange-600">{Number(worstLocation[selectedMetric]).toFixed(2)}</span>
                     <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
                   </div>
                 </div>

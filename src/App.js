@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef } from "react";
 import LandingPage from "./components/LandingPage";
+import InviteLanding from "./components/InviteLanding";
 import OnboardingForm from "./components/OnboardingForm";
 import HeatMapDashboard from "./components/HeatMapDashboard";
 import RawDataView from "./components/RawDataView";
@@ -14,6 +15,7 @@ import {
   register as registerApi,
   loginWithGoogle as loginWithGoogleApi,
   completeRegistration as completeRegistrationApi,
+  acceptInvitation,
   getMe,
   logout as logoutApi,
   getClassStructure,
@@ -81,13 +83,41 @@ const METRIC_THEMES = {
 };
 
 
+/** Client-side "current workspace" selection; the server has no notion of one. */
+const WORKSPACE_STORAGE_KEY = "airstory.currentWorkspaceId";
+/** Carries an invite token through the Firebase handshake (popup, refresh, log-in-then-accept). */
+const INVITE_TOKEN_STORAGE_KEY = "airstory.pendingInviteToken";
+
+function readInviteTokenFromLocation() {
+  const pathMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9_-]{20,})/);
+  const queryToken = new URLSearchParams(window.location.search).get("invite");
+  return pathMatch?.[1] || queryToken || "";
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [activeSection, setActiveSection] = useState("heatmap");
+  // Bumped to signal MyPage to scroll/focus the school field (e.g. from Manage Classes "Edit").
+  const [schoolFocusNonce, setSchoolFocusNonce] = useState(0);
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
   const [workspaceId, setWorkspaceId] = useState("");
   const [userRole, setUserRole] = useState("student");
+  // Sidebar hover tooltip: rendered with fixed positioning so it escapes the
+  // rail's overflow-y-auto (which otherwise clips a left-full popup horizontally).
+  const [workspaceTooltip, setWorkspaceTooltip] = useState(null);
+  /** All workspaces the user belongs to (from /auth/me), each with its embedded profile. */
+  const [memberships, setMemberships] = useState([]);
+  const [pendingInviteToken, setPendingInviteToken] = useState(() => {
+    const fromUrl = readInviteTokenFromLocation();
+    const token = fromUrl || sessionStorage.getItem(INVITE_TOKEN_STORAGE_KEY) || "";
+    if (token) sessionStorage.setItem(INVITE_TOKEN_STORAGE_KEY, token);
+    // Keep the SPA on "/" — sections are state-based, and the token now lives in storage.
+    if (fromUrl) window.history.replaceState({}, "", "/");
+    return token;
+  });
+  const [inviteActionLoading, setInviteActionLoading] = useState(false);
+  const [inviteActionError, setInviteActionError] = useState("");
   const [viewerProfile, setViewerProfile] = useState({
     displayName: "",
     school: "",
@@ -107,7 +137,7 @@ export default function App() {
   const lastProfileHierarchySnapRef = useRef("");
   const [filters, setFilters] = useState({
     country: "US",
-    state: "PA",
+    state: "",
     school: "",
     instructor: "",
     period: "",
@@ -144,24 +174,47 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  const clearPendingInvite = useCallback(() => {
+    sessionStorage.removeItem(INVITE_TOKEN_STORAGE_KEY);
+    setPendingInviteToken("");
+    setInviteActionError("");
+  }, []);
+
+  /** Prefer the locally persisted workspace; else land in a class (not the Public/school views). */
+  const pickMembership = (nextMemberships, preferredId) => {
+    if (!nextMemberships?.length) return null;
+    const storedId = preferredId || localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    const stored = nextMemberships.find((m) => m.workspace_id === storedId);
+    if (stored) return stored;
+    return nextMemberships.find((m) => (m.kind || "class") === "class") || nextMemberships[0];
+  };
+
   const syncFromMe = useCallback(async () => {
     if (!isLoggedIn) return;
     try {
       const me = await getMe();
       // The user has an app account, so they're past onboarding.
       setNeedsOnboarding(false);
-      const membership = me?.memberships?.[0] || null;
-      const profile = me?.profile || null;
+      const nextMemberships = me?.memberships || [];
+      setMemberships(nextMemberships);
+      const membership = pickMembership(nextMemberships);
+      const profile = membership?.profile || null;
+      // School is a per-class property (workspaces.school_id → membership.school_name), not the
+      // per-workspace profile, so read it from the membership.
+      const schoolName = membership?.school_name || "";
       const nextRole = membership?.role || userRole || "student";
       const isTeacherRole = nextRole === "teacher";
       // On a fresh page load there is no persisted workspace id (Firebase only restores identity),
-      // so hydrate it here from the membership returned by the backend.
-      if (membership?.workspace_id) setWorkspaceId(membership.workspace_id);
+      // so hydrate it here from the picked membership returned by the backend.
+      if (membership?.workspace_id) {
+        localStorage.setItem(WORKSPACE_STORAGE_KEY, membership.workspace_id);
+        setWorkspaceId(membership.workspace_id);
+      }
       setUserRole(nextRole);
       setViewerProfile((prev) => ({
         ...prev,
         displayName: me?.user?.full_name || prev.displayName,
-        school: profile?.school_code || "",
+        school: schoolName,
         instructor: profile?.instructor || "",
         period: profile?.period || "",
         group: profile?.group_code || "",
@@ -170,7 +223,7 @@ export default function App() {
       if (isTeacherRole) {
         setFilters((prev) => ({
           ...prev,
-          school: profile?.school_code != null && profile.school_code !== "" ? profile.school_code : prev.school,
+          school: schoolName,
           instructor:
             profile?.instructor != null && profile.instructor !== "" ? profile.instructor : prev.instructor,
           period: profile?.period != null && profile.period !== "" ? profile.period : prev.period,
@@ -179,7 +232,7 @@ export default function App() {
       }
       if (!isTeacherRole) {
         const profileSnap = [
-          profile?.school_code || "",
+          schoolName,
           profile?.instructor || "",
           profile?.period || "",
           profile?.group_code || "",
@@ -197,7 +250,7 @@ export default function App() {
           lastProfileHierarchySnapRef.current = profileSnap;
           setFilters((prev) => ({
             ...prev,
-            school: profile?.school_code || "",
+            school: schoolName,
             instructor: profile?.instructor || "",
             period: profile?.period || "",
             group: profile?.group_code || "",
@@ -205,7 +258,7 @@ export default function App() {
           }));
         }
       }
-      const wid = me?.memberships?.[0]?.workspace_id;
+      const wid = membership?.workspace_id;
       if (wid) {
         try {
           const s = await getClassStructure(wid);
@@ -306,9 +359,11 @@ export default function App() {
         // Render cold starts can make /auth/me briefly fail after login.
         // Keep the user logged in using the login payload and hydrate profile later.
       }
-      const membership = me?.memberships?.[0] || null;
-      const profile = me?.profile || null;
-      setWorkspaceId(session?.user?.workspaceId || membership?.workspace_id || "");
+      setMemberships(me?.memberships || []);
+      const membership = pickMembership(me?.memberships, session?.user?.workspaceId);
+      const profile = membership?.profile || null;
+      if (membership?.workspace_id) localStorage.setItem(WORKSPACE_STORAGE_KEY, membership.workspace_id);
+      setWorkspaceId(membership?.workspace_id || "");
       setUserRole(membership?.role || "student");
       setViewerProfile({
         displayName: me?.user?.full_name || session?.user?.fullName || "",
@@ -359,24 +414,25 @@ export default function App() {
     }
   };
 
-  // First-time federated users finish here: confirm name + role (+ join code for students).
-  const handleCompleteOnboarding = async ({ fullName, role, joinCode }) => {
+  // First-time federated users finish here: confirm name + workspace name (creating) or
+  // just name (joining by invitation).
+  const handleCompleteOnboarding = async ({ fullName, workspaceName }) => {
     setOnboardingError("");
     setOnboardingSubmitting(true);
     try {
       const cu = auth.currentUser;
       const email = cu?.email || "";
-      await completeRegistrationApi({
+      const inviteToken = pendingInviteToken || undefined;
+      const result = await completeRegistrationApi({
         email,
         fullName,
-        role,
-        workspaceName: role === "teacher" ? `${fullName} Workspace` : "Air Story class",
-        studentCode: role === "student" && email ? email.split("@")[0].toUpperCase() : "",
-        joinCode: role === "student" ? joinCode : undefined,
+        workspaceName: inviteToken ? undefined : (workspaceName || `${fullName} Workspace`),
+        inviteToken,
       });
+      if (inviteToken) clearPendingInvite();
       setNeedsOnboarding(false);
       await syncFromMe();
-      setActiveSection(role === "teacher" ? "manageclasses" : "heatmap");
+      setActiveSection(result?.role === "teacher" ? "manageclasses" : "heatmap");
     } catch (error) {
       setOnboardingError(error.message || "Could not finish setting up your account.");
     } finally {
@@ -390,7 +446,7 @@ export default function App() {
     await handleLogout();
   };
 
-  const handleRegister = async ({ email, password, fullName, mode, period, group, instructor, joinCode }) => {
+  const handleRegister = async ({ email, password, fullName, workspaceName, inviteToken }) => {
     setAuthError("");
     setAuthLoading(true);
     try {
@@ -399,34 +455,31 @@ export default function App() {
       if (!online) {
         throw new Error("Can't reach the server. Please check your connection and try again.");
       }
-      // Students always join via join code only; never reuse a stale workspace id from
-      // another session or the API may treat the signup inconsistently. A teacher creating
-      // another account from an active session reuses the current workspace.
-      const joinWorkspaceId = mode === "teacher" ? workspaceId || undefined : undefined;
+      // Exactly one path: an invite token (role/workspace come from the invitation) or a
+      // workspace name (create it and become its teacher). No standalone accounts.
+      const usedInviteToken = inviteToken || pendingInviteToken || undefined;
       const session = await registerApi({
         email,
         password,
         fullName,
-        workspaceName: mode === "student" ? "Air Story class" : `${fullName || "User"} Workspace`,
-        role: mode === "teacher" ? "teacher" : "student",
-        schoolCode: filters.school,
-        instructor: instructor || filters.instructor,
-        period: period || filters.period,
-        groupCode: group || filters.group,
-        studentCode: email.split("@")[0].toUpperCase(),
-        joinWorkspaceId,
-        joinCode: joinCode || undefined,
+        workspaceName: usedInviteToken ? undefined : (workspaceName || `${fullName || "User"} Workspace`),
+        inviteToken: usedInviteToken,
       });
+      if (usedInviteToken) clearPendingInvite();
       let me = null;
       try {
         me = await getMe();
       } catch {
         // Keep newly registered users signed in even if profile fetch is delayed.
       }
-      const membership = me?.memberships?.[0] || null;
-      const profile = me?.profile || null;
-      setWorkspaceId(session?.user?.workspaceId || membership?.workspace_id || "");
-      setUserRole(membership?.role || "student");
+      setMemberships(me?.memberships || []);
+      const membership = pickMembership(me?.memberships, session?.user?.workspaceId);
+      const profile = membership?.profile || null;
+      const nextWorkspaceId = session?.user?.workspaceId || membership?.workspace_id || "";
+      if (nextWorkspaceId) localStorage.setItem(WORKSPACE_STORAGE_KEY, nextWorkspaceId);
+      setWorkspaceId(nextWorkspaceId);
+      const nextRole = session?.role || membership?.role || "student";
+      setUserRole(nextRole);
       setViewerProfile({
         displayName: me?.user?.full_name || session?.user?.fullName || fullName || "",
         school: profile?.school_code || "",
@@ -436,7 +489,7 @@ export default function App() {
         studentId: profile?.student_code || email.split("@")[0].toUpperCase(),
       });
       setIsLoggedIn(true);
-      setActiveSection((membership?.role === "teacher") ? "manageclasses" : "heatmap");
+      setActiveSection(nextRole === "teacher" ? "manageclasses" : "heatmap");
       const rs = profile?.school_code ?? "";
       const ri = profile?.instructor ?? "";
       const rp = profile?.period ?? "";
@@ -457,6 +510,66 @@ export default function App() {
     }
   };
 
+  /** Switch the client-side current workspace; server state is untouched. */
+  const switchWorkspace = (nextWorkspaceId) => {
+    const membership = memberships.find((m) => m.workspace_id === nextWorkspaceId);
+    if (!membership || nextWorkspaceId === workspaceId) return;
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, nextWorkspaceId);
+    lastProfileHierarchySnapRef.current = "";
+    // Drop the previous workspace's measurement cache so the polling effect repopulates cleanly.
+    serverMeasurementCountRef.current = null;
+    clearImportedMeasurements();
+    setImportedDataVersion((v) => v + 1);
+    const profile = membership.profile || null;
+    const schoolName = membership.school_name || "";
+    setWorkspaceId(nextWorkspaceId);
+    setUserRole(membership.role);
+    setViewerProfile((prev) => ({
+      ...prev,
+      school: schoolName,
+      instructor: profile?.instructor || "",
+      period: profile?.period || "",
+      group: profile?.group_code || "",
+      studentId: profile?.student_code || "",
+    }));
+    setFilters((prev) => ({
+      ...prev,
+      school: schoolName,
+      instructor: profile?.instructor || "",
+      period: profile?.period || "",
+      group: profile?.group_code || "",
+      studentId: profile?.student_code || "",
+    }));
+    setActiveSection(membership.role === "teacher" ? "manageclasses" : "heatmap");
+  };
+
+  /** Signed-in user accepts a pending invite into an additional workspace. */
+  const handleAcceptInvite = async () => {
+    setInviteActionError("");
+    setInviteActionLoading(true);
+    try {
+      const result = await acceptInvitation(pendingInviteToken);
+      clearPendingInvite();
+      const nextWorkspaceId = result?.workspace?.id || "";
+      if (nextWorkspaceId) {
+        localStorage.setItem(WORKSPACE_STORAGE_KEY, nextWorkspaceId);
+        lastProfileHierarchySnapRef.current = "";
+        serverMeasurementCountRef.current = null;
+        clearImportedMeasurements();
+        setImportedDataVersion((v) => v + 1);
+        setWorkspaceId(nextWorkspaceId);
+        const nextRole = result?.membership?.role || "student";
+        setUserRole(nextRole);
+        setActiveSection(nextRole === "teacher" ? "manageclasses" : "heatmap");
+      }
+      await syncFromMe();
+    } catch (error) {
+      setInviteActionError(error.message || "Could not accept the invitation.");
+    } finally {
+      setInviteActionLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await logoutApi();
@@ -464,6 +577,10 @@ export default function App() {
       // Ignore logout API errors and still clear local UI session.
     } finally {
       lastProfileHierarchySnapRef.current = "";
+      // The pending invite token survives logout on purpose: an invitee signed in with the
+      // wrong account logs out and lands back on the invite page to continue with the right one.
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+      setMemberships([]);
       setIsLoggedIn(false);
       setWorkspaceId("");
       setUserRole("student");
@@ -492,6 +609,28 @@ export default function App() {
   };
 
   const isTeacher = userRole === "teacher";
+
+  // The Public / per-school aggregate workspaces are read-only views over other classes' data.
+  const currentMembership = memberships.find((m) => m.workspace_id === workspaceId) || null;
+  const currentWorkspaceKind = currentMembership?.kind || "class";
+  const isReadOnlyWorkspace = currentWorkspaceKind !== "class";
+  // Full name shown on hover in the sidebar tooltip.
+  const workspaceFullName = (m) => {
+    if (m.kind === "public") return "Public";
+    if (m.kind === "school") return m.school_name || m.workspace_name || "School";
+    return m.workspace_name || "Workspace";
+  };
+
+  // Sidebar icon: emoji for the aggregate workspaces, up to two initials for a class.
+  const workspaceIcon = (m) => {
+    if (m.kind === "public") return "🌐";
+    if (m.kind === "school") return "🏫";
+    const name = (m.workspace_name || "").trim();
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return "WS";
+  };
 
   const teacherNavInitials = () => {
     const name = (viewerProfile.displayName || "").trim();
@@ -533,14 +672,26 @@ export default function App() {
       >
         <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600 sticky top-0 z-50" />
         <main className="min-h-screen flex flex-col justify-center py-12">
-          <LandingPage
-            onLogin={handleLogin}
-            onRegister={handleRegister}
-            onGoogleLogin={handleGoogleLogin}
-            filters={filters}
-            authError={authError}
-            authLoading={authLoading}
-          />
+          {pendingInviteToken ? (
+            <InviteLanding
+              token={pendingInviteToken}
+              isLoggedIn={false}
+              onRegister={handleRegister}
+              onLogin={handleLogin}
+              onGoogleLogin={handleGoogleLogin}
+              onDismiss={clearPendingInvite}
+              authError={authError}
+              authLoading={authLoading}
+            />
+          ) : (
+            <LandingPage
+              onLogin={handleLogin}
+              onRegister={handleRegister}
+              onGoogleLogin={handleGoogleLogin}
+              authError={authError}
+              authLoading={authLoading}
+            />
+          )}
         </main>
         <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">
           <p>Air Story • TAMGU LAB @TC</p>
@@ -562,6 +713,7 @@ export default function App() {
           <OnboardingForm
             defaultName={auth.currentUser?.displayName || ""}
             email={auth.currentUser?.email || ""}
+            inviteToken={pendingInviteToken}
             onSubmit={handleCompleteOnboarding}
             onCancel={handleCancelOnboarding}
             submitting={onboardingSubmitting}
@@ -575,10 +727,98 @@ export default function App() {
     );
   }
 
+  // Signed-in user opened an invite link: offer to join the additional workspace.
+  if (pendingInviteToken) {
+    return (
+      <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100"
+           style={{
+             backgroundImage: `radial-gradient(#cbd5e1 1px, transparent 1px)`,
+             backgroundSize: '24px 24px'
+           }}
+      >
+        <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600 sticky top-0 z-50" />
+        <main className="min-h-screen flex flex-col justify-center py-12">
+          <InviteLanding
+            token={pendingInviteToken}
+            isLoggedIn
+            currentEmail={auth.currentUser?.email || ""}
+            onAccept={handleAcceptInvite}
+            onDismiss={clearPendingInvite}
+            onLogout={handleLogout}
+            authError={inviteActionError}
+            authLoading={inviteActionLoading}
+          />
+        </main>
+        <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">
+          <p>Air Story • TAMGU LAB @TC</p>
+        </footer>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Slack-style vertical workspace switcher */}
+      {!isPublicMode && memberships.length > 0 && (
+        <aside className="sticky top-0 h-screen w-20 shrink-0 bg-slate-900 flex flex-col items-center gap-3 py-4 overflow-y-auto z-50">
+          {memberships.map((m) => {
+            const active = m.workspace_id === workspaceId;
+            return (
+              <button
+                key={m.workspace_id}
+                type="button"
+                onClick={() => switchWorkspace(m.workspace_id)}
+                className="flex items-center justify-center"
+                aria-label={workspaceFullName(m)}
+                aria-current={active ? "true" : undefined}
+                onMouseEnter={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setWorkspaceTooltip({
+                    name: workspaceFullName(m),
+                    top: r.top + r.height / 2,
+                    left: r.right + 12,
+                  });
+                }}
+                onMouseLeave={() => setWorkspaceTooltip(null)}
+                onFocus={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setWorkspaceTooltip({
+                    name: workspaceFullName(m),
+                    top: r.top + r.height / 2,
+                    left: r.right + 12,
+                  });
+                }}
+                onBlur={() => setWorkspaceTooltip(null)}
+              >
+                <span
+                  className={`flex items-center justify-center w-12 h-12 rounded-full text-sm font-bold transition-all ${
+                    active
+                      ? "bg-blue-600 text-white ring-2 ring-white shadow-lg"
+                      : "bg-slate-700 text-slate-100 hover:bg-blue-600"
+                  }`}
+                >
+                  {workspaceIcon(m)}
+                </span>
+              </button>
+            );
+          })}
+        </aside>
+      )}
+
+      {/* Sidebar hover tooltip — fixed so it escapes the rail's scroll clipping. */}
+      {workspaceTooltip && (
+        <span
+          className="pointer-events-none fixed z-[100] -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg"
+          style={{ top: workspaceTooltip.top, left: workspaceTooltip.left }}
+        >
+          {workspaceTooltip.name}
+        </span>
+      )}
+
+      {/* Right column: top nav + main content */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
       {/* Top Navigation Bar */}
-      <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-50">
+      <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex items-center justify-between h-20">
             {/* Logo and Brand */}
@@ -686,6 +926,7 @@ export default function App() {
             metricThemes={METRIC_THEMES}
             onImportedDataChanged={handleImportedDataChanged}
             classStructure={classStructure}
+            isReadOnly={isReadOnlyWorkspace}
           />
         )}
         {activeSection === 'analysis' && (
@@ -710,6 +951,8 @@ export default function App() {
             onLogout={handleLogout}
             classStructure={classStructure}
             onProfileSaved={syncFromMe}
+            focusSchoolSignal={schoolFocusNonce}
+            schoolEditable={isTeacher && currentWorkspaceKind === "class"}
           />
         )}
         {activeSection === 'manageclasses' && isTeacher && (
@@ -722,6 +965,10 @@ export default function App() {
               if (next && typeof next === "object") setClassStructure(next);
               else refreshClassStructure();
             }}
+            onEditSchool={() => {
+              setActiveSection("mypage");
+              setSchoolFocusNonce((n) => n + 1);
+            }}
           />
         )}
       </main>
@@ -732,6 +979,7 @@ export default function App() {
           <p>&copy; 2026 Air Story. All rights reserved.</p>
         </div>
       </footer>
+      </div>
     </div>
   );
 }

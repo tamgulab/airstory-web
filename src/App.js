@@ -103,6 +103,9 @@ export default function App() {
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
   const [workspaceId, setWorkspaceId] = useState("");
   const [userRole, setUserRole] = useState("student");
+  // Sidebar hover tooltip: rendered with fixed positioning so it escapes the
+  // rail's overflow-y-auto (which otherwise clips a left-full popup horizontally).
+  const [workspaceTooltip, setWorkspaceTooltip] = useState(null);
   /** All workspaces the user belongs to (from /auth/me), each with its embedded profile. */
   const [memberships, setMemberships] = useState([]);
   const [pendingInviteToken, setPendingInviteToken] = useState(() => {
@@ -765,9 +768,27 @@ export default function App() {
                 key={m.workspace_id}
                 type="button"
                 onClick={() => switchWorkspace(m.workspace_id)}
-                className="group relative flex items-center justify-center"
+                className="flex items-center justify-center"
                 aria-label={workspaceFullName(m)}
                 aria-current={active ? "true" : undefined}
+                onMouseEnter={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setWorkspaceTooltip({
+                    name: workspaceFullName(m),
+                    top: r.top + r.height / 2,
+                    left: r.right + 12,
+                  });
+                }}
+                onMouseLeave={() => setWorkspaceTooltip(null)}
+                onFocus={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setWorkspaceTooltip({
+                    name: workspaceFullName(m),
+                    top: r.top + r.height / 2,
+                    left: r.right + 12,
+                  });
+                }}
+                onBlur={() => setWorkspaceTooltip(null)}
               >
                 <span
                   className={`flex items-center justify-center w-12 h-12 rounded-full text-sm font-bold transition-all ${
@@ -778,14 +799,20 @@ export default function App() {
                 >
                   {workspaceIcon(m)}
                 </span>
-                {/* Hover tooltip with the full workspace name */}
-                <span className="pointer-events-none absolute left-full ml-3 z-50 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                  {workspaceFullName(m)}
-                </span>
               </button>
             );
           })}
         </aside>
+      )}
+
+      {/* Sidebar hover tooltip — fixed so it escapes the rail's scroll clipping. */}
+      {workspaceTooltip && (
+        <span
+          className="pointer-events-none fixed z-[100] -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg"
+          style={{ top: workspaceTooltip.top, left: workspaceTooltip.left }}
+        >
+          {workspaceTooltip.name}
+        </span>
       )}
 
       {/* Right column: top nav + main content */}

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Camera, Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, Pencil, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements, setSessionVisibility } from '../api/data';
 import {
   clearImportedMeasurements,
@@ -1551,7 +1551,7 @@ const RawDataView = ({
                               {row.sessionNotes ? (
                                 <span className="inline-flex items-center gap-2">
                                   <span>{row.sessionNotes}</span>
-                                  <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">✏️</span>
+                                  <Pencil className="h-3 w-3 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                                   {isEdited(row.id, 'sessionNotes') && (
                                     <span className="text-xs text-orange-600 font-semibold">*</span>
                                   )}
@@ -1687,21 +1687,30 @@ const RawDataView = ({
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">📊 Viewing Data</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <BarChart3 className="h-4 w-4" aria-hidden="true" />
+                  Viewing Data
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• Click the <strong>chevron (▶)</strong> to expand rows and see detailed second-by-second sensor data</li>
                   <li>• Click <strong>location coordinates</strong> to open Google Maps</li>
                 </ul>
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">✏️ Editing Data</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                  Editing Data
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• <strong>Click any data value</strong> to edit it - edited values show a <span className="font-bold text-orange-600">*</span> badge</li>
                   <li>• <strong>Click notes</strong> to add context about measurement conditions</li>
                 </ul>
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">📷 Photos</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <Camera className="h-4 w-4" aria-hidden="true" />
+                  Photos
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• <strong>Click photos</strong> in expanded rows to view full-size images</li>
                   <li>• Photos show timestamps automatically</li>

@@ -1,54 +1,35 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Info, Download, Share2 } from 'lucide-react';
-import { GoogleMap, useJsApiLoader, HeatmapLayer, Marker, InfoWindow } from '@react-google-maps/api';
+import { GraduationCap, Info, Layers3, LocateFixed, Share2 } from 'lucide-react';
+import MapView, {
+  FullscreenControl, Layer, Marker, NavigationControl, Popup, Source,
+} from 'react-map-gl/maplibre';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import html2canvas from 'html2canvas';
 import { getImportedMeasurements } from '../utils/importedData';
-import { getHeatmapPoints } from '../api/data';
+import { getSchools } from '../api/schools';
 import { apiRequest } from '../api/http';
+import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
 
-const AQI_RANGES = {
-  pm25: [
-    { max: 12, label: 'Good', color: '#A7E8B1' },
-    { max: 35, label: 'Moderate', color: '#FFF3B0' },
-    { max: 55, label: 'Unhealthy (Sensitive)', color: '#FFD6A5' },
-    { max: 150, label: 'Unhealthy', color: '#FFB8B8' },
-    { max: Infinity, label: 'Very Unhealthy', color: '#DDA0DD' },
-  ],
-};
+const MAP_STYLE_URL =
+  process.env.REACT_APP_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
 
-const getColorForValue = (value, metric = 'pm25') => {
-  const ranges = AQI_RANGES[metric] || AQI_RANGES.pm25;
-  for (let range of ranges) {
-    if (value <= range.max) return range.color;
-  }
-  return ranges[ranges.length - 1].color;
-};
+/** Pre-registered preset cities with real OpenAQ coverage, so anyone can preview the heat map. */
+const PRESET_CITIES = Object.freeze([
+  { id: 'philadelphia', label: 'Philadelphia', city: 'Philadelphia, PA', lat: 39.9526, lng: -75.1652, radius: 15000 },
+  { id: 'newyork', label: 'New York', city: 'New York, NY', lat: 40.7128, lng: -74.006, radius: 15000 },
+  { id: 'hanoi', label: 'Hanoi', city: 'Hanoi, Vietnam', lat: 21.0278, lng: 105.8342, radius: 15000 },
+]);
 
-const getStatusLabel = (value, metric = 'pm25') => {
-  const ranges = AQI_RANGES[metric] || AQI_RANGES.pm25;
-  for (let range of ranges) {
-    if (value <= range.max) return range.label;
-  }
-  return ranges[ranges.length - 1].label;
-};
-
-// Stable references — new [] / {} each render makes LoadScript reload the Maps API (flicker / “bouncing”).
-const GOOGLE_MAP_LIBRARIES = Object.freeze(['visualization']);
-const MAP_CONTAINER_STYLE = Object.freeze({ width: '100%', height: '100%' });
-
-// Silver/desaturated map styling
-const mapStyles = [
-  { "elementType": "geometry", "stylers": [{ "color": "#f5f5f5" }] },
-  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
-  { "elementType": "labels.text.fill", "stylers": [{ "color": "#616161" }] },
-  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#f5f5f5" }] },
-  { "featureType": "poi", "elementType": "geometry", "stylers": [{ "color": "#eeeeee" }] },
-  { "featureType": "poi.park", "elementType": "geometry", "stylers": [{ "color": "#e5e5e5" }] },
-  { "featureType": "road", "elementType": "geometry", "stylers": [{ "color": "#ffffff" }] },
-  { "featureType": "road.arterial", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#dadada" }] },
-  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#c9c9c9" }] }
+/** Distinct, colorblind-considerate palette used for both team and school trail coloring. */
+const TRAIL_COLOR_PALETTE = [
+  '#2563EB', '#DC2626', '#059669', '#7C3AED', '#D97706',
+  '#0891B2', '#DB2777', '#65A30D', '#4F46E5', '#EA580C',
 ];
+
+function colorForKey(key, keyOrder) {
+  const idx = keyOrder.indexOf(key);
+  return TRAIL_COLOR_PALETTE[(idx < 0 ? 0 : idx) % TRAIL_COLOR_PALETTE.length];
+}
 
 // Air quality gradient (Transparent -> Green -> Yellow -> Orange -> Red -> Purple -> Maroon)
 const heatmapGradient = [
@@ -72,27 +53,18 @@ const accessibleGradient = [
   'rgba(255, 255, 255, 1)'
 ];
 
-/**
- * OpenAQ + map chrome: always Philadelphia for this program.
- * (Avoids legacy per-school centers that still pointed at NYC / Manhattan in older builds.)
- */
-const PROGRAM_REGION = { city: 'Philadelphia, PA', lat: 39.9526, lng: -75.1652, radius: 15000 };
-
-/** Program partner school — 1400 W Olney Ave, Philadelphia, PA (approx. entrance). */
-const PHILADELPHIA_HS_FOR_GIRLS = Object.freeze({
-  name: 'Philadelphia High School for Girls',
-  shortLabel: 'PHSG',
-  address: '1400 W Olney Ave, Philadelphia, PA 19141',
-  lat: 40.03625,
-  lng: -75.14504,
-});
+/** Short label for the map pin/control from a school name, e.g. "Lincoln High School" -> "LHS". */
+function shortLabelFromSchoolName(name) {
+  const initials = String(name || '')
+    .split(/\s+/)
+    .filter((w) => /^[A-Za-z]/.test(w))
+    .map((w) => w[0].toUpperCase())
+    .join('');
+  return initials.slice(0, 4) || 'SCH';
+}
 
 /** Zoom when jumping to the partner school from the map control. */
 const SCHOOL_FOCUS_ZOOM = 16;
-
-/** Inline SVG (Lucide-style graduation cap) for the custom map control — avoids ReactDOM on the control node. */
-const SCHOOL_MAP_CONTROL_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#374151" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>';
 
 const StatusInfoModal = ({ isOpen, onClose, theme }) => {
   if (!isOpen) return null;
@@ -158,7 +130,8 @@ const StatusInfoModal = ({ isOpen, onClose, theme }) => {
 };
 
 const HeatMapDashboard = ({
-  workspaceId,
+  workspaceKind = 'class', // 'class' | 'school' | 'public' — drives trail color scope
+  schoolId = null,
   selectedMetric,
   setSelectedMetric,
   filters,
@@ -169,82 +142,107 @@ const HeatMapDashboard = ({
   const [showStatusInfo, setShowStatusInfo] = useState(false);
   const [selectedTimeRange] = useState('all-time');
   const [displayMode, setDisplayMode] = useState('default'); // 'default' or 'accessible'
-  const [, setMap] = useState(null);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [selectedCityId, setSelectedCityId] = useState(PRESET_CITIES[0].id);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState('');
   const [schoolPinOpen, setSchoolPinOpen] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [geoError, setGeoError] = useState('');
   const [isCapturing, setIsCapturing] = useState(false);
+  const [schoolDirectory, setSchoolDirectory] = useState([]);
   const screenshotRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const schoolMapControlRef = useRef(null);
-  /** When set, map + heatmap use aggregated workspace measurements (real lat/lng from DB). */
-  const [workspaceHeatmap, setWorkspaceHeatmap] = useState(null);
   const [openaqHeatmap, setOpenaqHeatmap] = useState(null);
+  const [openaqStatus, setOpenaqStatus] = useState('idle');
   const importedMeasurements = useMemo(
     () => getImportedMeasurements(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [importedDataVersion]
   );
 
-  // Get Google Maps API key from environment variable
-  const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
+  const selectedCity = useMemo(
+    () => PRESET_CITIES.find((c) => c.id === selectedCityId) || PRESET_CITIES[0],
+    [selectedCityId]
+  );
 
-  // Load the Maps JS API once for the app's lifetime. useJsApiLoader is a module-level singleton,
-  // so it survives the mount/unmount churn (auth flow, tab switches) that made the old <LoadScript>
-  // hang on "Loading map…" when window.google was already partially defined from an aborted load.
-  const { isLoaded: isMapsApiLoaded, loadError } = useJsApiLoader({
-    id: 'airstory-google-maps',
-    googleMapsApiKey,
-    libraries: GOOGLE_MAP_LIBRARIES,
-    version: 'quarterly',
-  });
-  const mapsLoadError = loadError
-    ? 'Google Maps failed to load. This is usually caused by an invalid API key, missing billing, or referrer restrictions for this domain.'
-    : '';
-
+  // The school directory now carries map coordinates (see backend migration 008); resolve the
+  // current class's assigned school (My Page) to a pin, so changing it there moves the pin here.
   useEffect(() => {
-    if (!workspaceId) {
-      setWorkspaceHeatmap(null);
-      return;
-    }
     let cancelled = false;
-    (async () => {
-      try {
-        const data = await getHeatmapPoints(workspaceId, selectedMetric);
-        if (cancelled) return;
-        setWorkspaceHeatmap({ points: data.points || [] });
-      } catch {
-        if (cancelled) return;
-        setWorkspaceHeatmap(null);
-      }
-    })();
+    getSchools()
+      .then((data) => {
+        if (!cancelled) setSchoolDirectory(data.schools || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSchoolDirectory([]);
+      });
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, selectedMetric]);
+  }, []);
+
+  const activeSchoolPin = useMemo(() => {
+    const match = schoolDirectory.find((school) =>
+      schoolId ? school.id === schoolId : school.name === filters.school
+    );
+    if (match && Number.isFinite(Number(match.latitude)) && Number.isFinite(Number(match.longitude))) {
+      return {
+        name: match.name,
+        shortLabel: shortLabelFromSchoolName(match.name),
+        address: match.name,
+        lat: Number(match.latitude),
+        lng: Number(match.longitude),
+      };
+    }
+    return null;
+  }, [schoolDirectory, schoolId, filters.school]);
+
+  // Start each class in the reference city nearest its assigned school. Teachers can still switch
+  // cities manually afterward; this only reruns when the class-school assignment changes.
+  useEffect(() => {
+    if (!activeSchoolPin) return;
+    const nearestCity = PRESET_CITIES.reduce((nearest, city) => {
+      const distance = ((city.lat - activeSchoolPin.lat) ** 2) + ((city.lng - activeSchoolPin.lng) ** 2);
+      const nearestDistance =
+        ((nearest.lat - activeSchoolPin.lat) ** 2) + ((nearest.lng - activeSchoolPin.lng) ** 2);
+      return distance < nearestDistance ? city : nearest;
+    }, PRESET_CITIES[0]);
+    setSelectedCityId(nearestCity.id);
+  }, [activeSchoolPin]);
 
   useEffect(() => {
+    if (!showHeatmap) {
+      setOpenaqStatus('idle');
+      return undefined;
+    }
     let cancelled = false;
+    setOpenaqHeatmap(null);
+    setOpenaqStatus('loading');
     (async () => {
       try {
         const q = new URLSearchParams({
-          lat: String(PROGRAM_REGION.lat),
-          lng: String(PROGRAM_REGION.lng),
+          lat: String(selectedCity.lat),
+          lng: String(selectedCity.lng),
           metric: selectedMetric,
-          radius: String(PROGRAM_REGION.radius),
+          radius: String(selectedCity.radius),
           limit: '25',
         });
         const data = await apiRequest(`/analytics/openaq/heatmap?${q.toString()}`);
         if (cancelled) return;
         setOpenaqHeatmap({ points: data.points || [] });
+        setOpenaqStatus('success');
       } catch {
         if (cancelled) return;
         setOpenaqHeatmap(null);
+        setOpenaqStatus('error');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedMetric]);
+  }, [showHeatmap, selectedMetric, selectedCity]);
 
   const importedPoints = useMemo(() => {
     return importedMeasurements
@@ -270,11 +268,88 @@ const HeatMapDashboard = ({
           humidity: Number(row.humidity) || 0,
           timestamp: ts,
           school: row.school || '',
+          instructor: row.instructor || '',
+          period: row.period || '',
           group: row.group || '',
         };
       })
       .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !Number.isNaN(p.timestamp.getTime()));
   }, [importedMeasurements, filters]);
+
+  // Trails use a wider (unfiltered-by-team) slice than the heat/aggregate view, so a class period
+  // can show every team's path — see the coloring rules below for how scope maps to color.
+  const trailScopedPoints = useMemo(() => {
+    return importedMeasurements
+      .filter((row) => {
+        if (workspaceKind === 'public') return true; // every school
+        // 'school' and 'class' both restrict to the current school; 'class' further restricts
+        // to the current period so only that period's teams are drawn (still all teams in it).
+        if (filters.school && row.school && row.school !== filters.school) return false;
+        if (workspaceKind === 'class') {
+          if (filters.instructor && row.instructor && row.instructor !== filters.instructor) return false;
+          if (filters.period && row.period && row.period !== filters.period) return false;
+        }
+        return true;
+      })
+      .map((row) => {
+        const ts = row.capturedAt
+          ? new Date(row.capturedAt)
+          : new Date(`${row.date || '1970-01-01'}T${row.time || '00:00'}`);
+        return {
+          lat: Number(row.latitude),
+          lng: Number(row.longitude),
+          timestamp: ts,
+          school: row.school || 'Unknown school',
+          instructor: row.instructor || '',
+          period: row.period || '',
+          group: row.group || 'Team',
+        };
+      })
+      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !Number.isNaN(p.timestamp.getTime()));
+  }, [importedMeasurements, filters.school, filters.instructor, filters.period, workspaceKind]);
+
+  /**
+   * Group into one chronological path per team (school+instructor+period+group), then color by:
+   *  - 'class' scope: one color per team, so a period with several teams is easy to tell apart.
+   *  - 'school' scope: one color per school — since this view is a single school, every team's
+   *    path collapses to the same color (unified, not per-team).
+   *  - 'public' scope: one color per school, so different schools stay visually distinct.
+   */
+  const trailPaths = useMemo(() => {
+    const byTeam = new Map();
+    trailScopedPoints.forEach((p) => {
+      const teamKey = [p.school, p.instructor, p.period, p.group].join('|');
+      if (!byTeam.has(teamKey)) {
+        byTeam.set(teamKey, {
+          teamKey,
+          colorKey: workspaceKind === 'class' ? p.group : p.school,
+          label: workspaceKind === 'class' ? p.group : p.school,
+          points: [],
+        });
+      }
+      byTeam.get(teamKey).points.push(p);
+    });
+
+    const colorKeyOrder = [...new Set([...byTeam.values()].map((t) => t.colorKey))].sort();
+
+    return [...byTeam.values()]
+      .map((team) => ({
+        ...team,
+        color: colorForKey(team.colorKey, colorKeyOrder),
+        path: [...team.points]
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .map((p) => ({ lat: p.lat, lng: p.lng })),
+      }))
+      .filter((team) => team.path.length >= 2);
+  }, [trailScopedPoints, workspaceKind]);
+
+  const trailLegendItems = useMemo(() => {
+    const seen = new Map();
+    trailPaths.forEach((t) => {
+      if (!seen.has(t.colorKey)) seen.set(t.colorKey, t.color);
+    });
+    return [...seen.entries()].map(([label, color]) => ({ label, color }));
+  }, [trailPaths]);
 
   // Filter imported locations based on selected time range
   const filteredLocations = useMemo(() => {
@@ -337,82 +412,26 @@ const HeatMapDashboard = ({
     return `${formatDate(minDate)} - ${formatDate(maxDate)}`;
   }, [filteredLocations]);
 
-  const usingWorkspaceHeatmap =
-    Boolean(workspaceId && workspaceHeatmap?.points && workspaceHeatmap.points.length > 0);
   const usingOpenAQHeatmap = Boolean(openaqHeatmap?.points?.length);
 
-  // Aggregate filtered data by location (demo) — or use real workspace buckets from API
+  // Heatmap points are always real OpenAQ readings. Student measurements are rendered only as trails.
   const locations = useMemo(() => {
-    if (usingOpenAQHeatmap) {
-      return (openaqHeatmap?.points || []).map((p, i) => {
-        const v = Number(p.value);
-        const row = {
-          id: `openaq-${i}`,
-          name: p.location_name || `OpenAQ Site ${i + 1}`,
-          lat: Number(p.latitude),
-          lng: Number(p.longitude),
-          pm25: 0,
-          co: 0,
-          temp: 0,
-          humidity: 0,
-        };
-        row[selectedMetric] = Number.isFinite(v) ? v : 0;
-        return row;
-      });
-    }
-
-    const pts = workspaceHeatmap?.points;
-    if (usingWorkspaceHeatmap) {
-      return pts.map((p, i) => {
-        const v = Number(p.value);
-        const row = {
-          id: `ws-${i}`,
-          name: `Site ${i + 1} (${p.point_count} readings)`,
-          lat: Number(p.latitude),
-          lng: Number(p.longitude),
-          pm25: 0,
-          co: 0,
-          temp: 0,
-          humidity: 0,
-        };
-        row[selectedMetric] = Number.isFinite(v) ? v : 0;
-        return row;
-      });
-    }
-
-    const locationMap = {};
-
-    filteredLocations.forEach((point) => {
-      const key = point.name;
-      if (!locationMap[key]) {
-        locationMap[key] = {
-          ...point,
-          count: 1,
-          pm25Sum: point.pm25,
-          coSum: point.co,
-          tempSum: point.temp,
-          humiditySum: point.humidity,
-        };
-      } else {
-        locationMap[key].count++;
-        locationMap[key].pm25Sum += point.pm25;
-        locationMap[key].coSum += point.co;
-        locationMap[key].tempSum += point.temp;
-        locationMap[key].humiditySum += point.humidity;
-      }
+    return (openaqHeatmap?.points || []).map((point, index) => {
+      const value = Number(point.value);
+      const row = {
+        id: `openaq-${index}`,
+        name: point.location_name || `OpenAQ Site ${index + 1}`,
+        lat: Number(point.latitude),
+        lng: Number(point.longitude),
+        pm25: 0,
+        co: 0,
+        temp: 0,
+        humidity: 0,
+      };
+      row[selectedMetric] = Number.isFinite(value) ? value : 0;
+      return row;
     });
-
-    return Object.values(locationMap).map((loc) => ({
-      id: loc.id,
-      name: loc.name,
-      lat: loc.lat,
-      lng: loc.lng,
-      pm25: Math.round(loc.pm25Sum / loc.count),
-      co: parseFloat((loc.coSum / loc.count).toFixed(2)),
-      temp: Math.round(loc.tempSum / loc.count),
-      humidity: Math.round(loc.humiditySum / loc.count),
-    }));
-  }, [filteredLocations, workspaceHeatmap, usingWorkspaceHeatmap, selectedMetric, usingOpenAQHeatmap, openaqHeatmap]);
+  }, [openaqHeatmap, selectedMetric]);
 
   // Calculate Averages for Sidebar
   const filteredImported = useMemo(() => {
@@ -436,15 +455,13 @@ const HeatMapDashboard = ({
   }, [importedMeasurements, selectedTimeRange]);
 
   const stats = useMemo(() => {
-    if (!locations.length) {
-      return { city: null, school: null, group: null };
-    }
-
     const metric = selectedMetric;
 
-    const cityAvg = Math.round(
-      locations.reduce((sum, loc) => sum + parseFloat(loc[metric] ?? 0), 0) / Math.max(locations.length, 1)
-    );
+    const cityAvg = showHeatmap && locations.length
+      ? Math.round(
+        locations.reduce((sum, loc) => sum + parseFloat(loc[metric] ?? 0), 0) / locations.length
+      )
+      : null;
 
     // School/group cards should always come from your class CSV/workspace records, never OpenAQ city feed.
     const sourceForSchoolAndGroup = filteredImported;
@@ -469,129 +486,145 @@ const HeatMapDashboard = ({
     selectedMetric,
     filters,
     locations,
+    showHeatmap,
   ]);
 
-  const bestLocation = locations.length
+  const bestLocation = showHeatmap && locations.length
     ? locations.reduce((best, loc) => (loc[selectedMetric] < best[selectedMetric] ? loc : best))
     : null;
 
-  const worstLocation = locations.length
+  const worstLocation = showHeatmap && locations.length
     ? locations.reduce((worst, loc) => (loc[selectedMetric] > worst[selectedMetric] ? loc : worst))
     : null;
 
   const mapCenter = useMemo(() => {
-    if (usingOpenAQHeatmap) {
-      return { lat: PROGRAM_REGION.lat, lng: PROGRAM_REGION.lng };
+    if (showHeatmap) {
+      return { lat: selectedCity.lat, lng: selectedCity.lng };
     }
-    const pts = workspaceHeatmap?.points;
-    if (workspaceId && pts?.length) {
-      const lat = pts.reduce((s, p) => s + Number(p.latitude), 0) / pts.length;
-      const lng = pts.reduce((s, p) => s + Number(p.longitude), 0) / pts.length;
+    const trailPoints = trailPaths.flatMap((trail) => trail.path);
+    if (trailPoints.length) {
+      const lat = trailPoints.reduce((sum, point) => sum + Number(point.lat), 0) / trailPoints.length;
+      const lng = trailPoints.reduce((sum, point) => sum + Number(point.lng), 0) / trailPoints.length;
       if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
     }
-    if (locations.length) {
-      const lat = locations.reduce((s, p) => s + Number(p.lat), 0) / locations.length;
-      const lng = locations.reduce((s, p) => s + Number(p.lng), 0) / locations.length;
-      if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+    if (activeSchoolPin) return { lat: activeSchoolPin.lat, lng: activeSchoolPin.lng };
+    return { lat: selectedCity.lat, lng: selectedCity.lng };
+  }, [showHeatmap, selectedCity, trailPaths, activeSchoolPin]);
+
+  const heatmapData = useMemo(() => ({
+    type: 'FeatureCollection',
+    features: locations.map((location) => ({
+      type: 'Feature',
+      properties: { weight: Number(location[selectedMetric]) || 0 },
+      geometry: {
+        type: 'Point',
+        coordinates: [Number(location.lng), Number(location.lat)],
+      },
+    })),
+  }), [locations, selectedMetric]);
+
+  const trailData = useMemo(() => ({
+    type: 'FeatureCollection',
+    features: trailPaths.map((trail) => ({
+      type: 'Feature',
+      properties: { color: trail.color, label: trail.label },
+      geometry: {
+        type: 'LineString',
+        coordinates: trail.path.map((point) => [point.lng, point.lat]),
+      },
+    })),
+  }), [trailPaths]);
+
+  const heatmapLayer = useMemo(() => {
+    const gradient = displayMode === 'accessible' ? accessibleGradient : heatmapGradient;
+    const maxWeight = Math.max(
+      1,
+      ...locations.map((location) => Number(location[selectedMetric]) || 0)
+    );
+    return {
+      id: 'air-quality-heat',
+      type: 'heatmap',
+      maxzoom: 18,
+      paint: {
+        'heatmap-weight': ['interpolate', ['linear'], ['get', 'weight'], 0, 0, maxWeight, 1],
+        'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 0.7, 14, 1.4],
+        'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 12, 14, 42],
+        'heatmap-opacity': 0.72,
+        'heatmap-color': [
+          'interpolate', ['linear'], ['heatmap-density'],
+          0, gradient[0],
+          0.18, gradient[1],
+          0.36, gradient[2],
+          0.54, gradient[3],
+          0.72, gradient[4],
+          0.88, gradient[5],
+          1, gradient[6],
+        ],
+      },
+    };
+  }, [displayMode, locations, selectedMetric]);
+
+  const trailLayer = useMemo(() => ({
+    id: 'measurement-trails',
+    type: 'line',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': 3,
+      'line-opacity': 0.88,
+      'line-dasharray': [2, 2],
+    },
+  }), []);
+
+  useEffect(() => {
+    if (!isLoaded || !mapInstanceRef.current) return;
+    mapInstanceRef.current.flyTo({
+      center: [mapCenter.lng, mapCenter.lat],
+      zoom: 12,
+      duration: 700,
+    });
+  }, [isLoaded, mapCenter.lat, mapCenter.lng]);
+
+  const focusSchool = useCallback(() => {
+    if (!activeSchoolPin) return;
+    mapInstanceRef.current?.flyTo({
+      center: [activeSchoolPin.lng, activeSchoolPin.lat],
+      zoom: SCHOOL_FOCUS_ZOOM,
+      duration: 900,
+    });
+    setSchoolPinOpen(true);
+  }, [activeSchoolPin]);
+
+  const focusMyLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGeoError('Location is not supported by this browser.');
+      return;
     }
-    return { lat: PROGRAM_REGION.lat, lng: PROGRAM_REGION.lng };
-  }, [workspaceHeatmap, workspaceId, locations, usingOpenAQHeatmap]);
 
-  // Transform location data to WeightedLocation format for HeatmapLayer
-  const heatmapData = useMemo(() => {
-    if (!isLoaded || !window.google || !window.google.maps) {
-      return [];
-    }
-    return locations.map(location => {
-      const value = location[selectedMetric];
-      // Use the AQI value as weight - higher values create more intense heat
-      return {
-        location: new window.google.maps.LatLng(location.lat, location.lng),
-        weight: value
-      };
-    });
-  }, [locations, selectedMetric, isLoaded]);
-
-  // HeatmapLayer options
-  const heatmapOptions = useMemo(() => ({
-    radius: 40,
-    opacity: 0.7,
-    dissipating: true,
-    gradient: displayMode === 'accessible' ? accessibleGradient : heatmapGradient
-  }), [displayMode]);
-
-  const onMapLoad = useCallback((mapInstance) => {
-    mapInstanceRef.current = mapInstance;
-    setMap(mapInstance);
-    setIsLoaded(true);
-
-    if (!window.google?.maps?.ControlPosition) return;
-
-    const wrapper = document.createElement('div');
-    wrapper.style.display = 'flex';
-    wrapper.style.flexDirection = 'column';
-    wrapper.style.alignItems = 'center';
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.title = `Go to ${PHILADELPHIA_HS_FOR_GIRLS.name}`;
-    btn.setAttribute('aria-label', `Center map on ${PHILADELPHIA_HS_FOR_GIRLS.name}`);
-    btn.innerHTML = SCHOOL_MAP_CONTROL_SVG;
-    Object.assign(btn.style, {
-      backgroundColor: '#fff',
-      border: 'none',
-      borderRadius: '2px',
-      boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-      cursor: 'pointer',
-      margin: '10px',
-      padding: '9px',
-      width: '40px',
-      height: '40px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-    });
-
-    btn.addEventListener('click', () => {
-      mapInstance.panTo({
-        lat: PHILADELPHIA_HS_FOR_GIRLS.lat,
-        lng: PHILADELPHIA_HS_FOR_GIRLS.lng,
-      });
-      mapInstance.setZoom(SCHOOL_FOCUS_ZOOM);
-      setSchoolPinOpen(true);
-    });
-
-    wrapper.appendChild(btn);
-    mapInstance.controls[window.google.maps.ControlPosition.RIGHT_TOP].insertAt(0, wrapper);
-    schoolMapControlRef.current = wrapper;
+    setIsLocating(true);
+    setGeoError('');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const location = { lat: coords.latitude, lng: coords.longitude };
+        setUserLocation(location);
+        setIsLocating(false);
+        mapInstanceRef.current?.flyTo({
+          center: [location.lng, location.lat],
+          zoom: 15,
+          duration: 900,
+        });
+      },
+      (error) => {
+        const messages = {
+          1: 'Location permission was denied.',
+          2: 'Your location is currently unavailable.',
+          3: 'Finding your location timed out.',
+        };
+        setGeoError(messages[error.code] || 'Unable to find your location.');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
   }, []);
-
-  const onMapUnmount = useCallback(() => {
-    const mapInstance = mapInstanceRef.current;
-    const controlEl = schoolMapControlRef.current;
-    if (mapInstance && controlEl && window.google?.maps?.ControlPosition) {
-      const slot = mapInstance.controls[window.google.maps.ControlPosition.RIGHT_TOP];
-      const arr = slot?.getArray?.() || [];
-      const idx = arr.indexOf(controlEl);
-      if (idx >= 0) slot.removeAt(idx);
-    }
-    schoolMapControlRef.current = null;
-    mapInstanceRef.current = null;
-    setMap(null);
-    setIsLoaded(false);
-  }, []);
-
-  const googleMapOptions = useMemo(
-    () => ({
-      styles: mapStyles,
-      disableDefaultUI: false,
-      zoomControl: true,
-      streetViewControl: false,
-      mapTypeControl: false,
-      fullscreenControl: true,
-    }),
-    []
-  );
 
   // Generate a code (e.g., session identifier)
   const generateCode = useCallback(() => {
@@ -717,362 +750,396 @@ const HeatMapDashboard = ({
   }, [filters, generateCode, isCapturing]);
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Air Quality Heat Map</h1>
-          <p className="text-gray-600">OpenAQ city visualization for {PROGRAM_REGION.city}</p>
-        </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={handleShareScreenshot}
-            disabled={isCapturing}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Share2 className="w-4 h-4" />
-            {isCapturing ? 'Capturing...' : 'Share'}
-          </button>
-          <button 
-            onClick={() => alert('Export functionality coming soon')}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
-        </div>
-      </div>
-
-      {/* Screenshot Container - includes metric selector and map/stats */}
-      <div ref={screenshotRef} className="space-y-6">
-      {/* Metric Selector */}
-      <div className="bg-white rounded-xl p-4 shadow-lg border border-gray-200">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-semibold text-gray-900">Select Metric</h2>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Range:</span>
-            <span className="text-xs font-medium text-gray-700 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
-              {dateRangeLabel}
-            </span>
+    <div className="h-[calc(100vh-6.5rem)] min-h-[620px]">
+      {/* Screenshot container — everything the Share button captures */}
+      <div ref={screenshotRef} className="relative h-full overflow-hidden rounded-2xl bg-slate-100 shadow-lg">
+        {/* Floating controls stay visible without consuming map width. */}
+        <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-white/70 bg-white/95 p-2 shadow-lg backdrop-blur sm:left-4 sm:right-auto sm:max-w-[calc(100%-2rem)]">
+          <div className="hidden min-w-0 sm:block">
+            <p className="truncate text-sm font-bold text-gray-900">Air Quality Map</p>
+            <p className="truncate text-[10px] text-gray-500">
+              {showHeatmap ? `${selectedCity.city} · OpenAQ reference` : `Student trails · ${dateRangeLabel}`}
+            </p>
           </div>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          {Object.entries(metricThemes).map(([key, metric]) => (
-            <button 
-              key={key} 
-              onClick={() => setSelectedMetric(key)}
-              className={`py-2.5 px-3 rounded-lg text-xs font-medium transition-all ${
-                selectedMetric === key 
-                  ? `${metric.bg} text-white shadow-md scale-105` 
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              <div className="text-sm font-bold">{metric.label}</div>
-              <div className="text-xs opacity-90 mt-0.5">{metric.unit}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Map and Stats Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-        {/* Interactive Map - 2 columns */}
-        <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-lg border border-gray-200 flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">{PROGRAM_REGION.city} Air Quality Map</h2>
-              {usingOpenAQHeatmap ? (
-                <p className="text-xs text-emerald-700 mt-1 font-medium">
-                  Visualization source: OpenAQ sensors in the Philadelphia region.
-                </p>
-              ) : usingWorkspaceHeatmap ? (
-                <p className="text-xs text-emerald-700 mt-1 font-medium">
-                  OpenAQ is unavailable right now, so this is showing your workspace measurements.
-                </p>
-              ) : null}
-            </div>
-            <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-1">
-              <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mr-2">Mode</span>
-              <button 
-                onClick={() => setDisplayMode(prev => prev === 'default' ? 'accessible' : 'default')}
-                className={`w-10 h-5 flex items-center rounded-full p-1 transition-colors duration-300 focus:outline-none ${
-                  displayMode === 'accessible' ? 'bg-blue-600' : 'bg-gray-300'
+          <div className="hidden h-7 w-px bg-gray-200 sm:block" />
+          <div className="flex gap-1.5">
+            {Object.entries(metricThemes).map(([key, metric]) => (
+              <button
+                key={key}
+                onClick={() => setSelectedMetric(key)}
+                title={metric.label}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  selectedMetric === key
+                    ? `${metric.bg} text-white shadow-sm`
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                <div
-                  className={`bg-white w-3 h-3 rounded-full shadow-md transform transition-transform duration-300 ${
-                    displayMode === 'accessible' ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
+                {metric.label}
               </button>
-            </div>
+            ))}
           </div>
-          
-          {/* Google Maps Container */}
-          <div className="relative rounded-xl overflow-hidden border-2 border-gray-200 flex-1" style={{ minHeight: '600px' }}>
-            {googleMapsApiKey ? (
-              isMapsApiLoaded ? (
-                <GoogleMap
-                  mapContainerStyle={MAP_CONTAINER_STYLE}
-                  center={mapCenter}
-                  zoom={12}
-                  options={googleMapOptions}
-                  onLoad={onMapLoad}
-                  onUnmount={onMapUnmount}
+
+          <div className="hidden h-5 w-px bg-gray-200 sm:block" />
+
+          <button
+            type="button"
+            aria-pressed={showHeatmap}
+            onClick={() => setShowHeatmap((visible) => !visible)}
+            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+              showHeatmap
+                ? 'border-emerald-600 bg-emerald-600 text-white'
+                : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Layers3 className="h-3.5 w-3.5" aria-hidden="true" />
+            Heatmap {showHeatmap ? 'on' : 'off'}
+          </button>
+
+          {showHeatmap && (
+            <>
+              <div className="flex gap-1.5">
+                {PRESET_CITIES.map((city) => (
+                  <button
+                    key={city.id}
+                    type="button"
+                    onClick={() => setSelectedCityId(city.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      selectedCityId === city.id
+                        ? 'bg-slate-800 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {city.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+                <span className="hidden text-[10px] font-bold uppercase tracking-wider text-gray-500 lg:inline lg:mr-2">Accessible</span>
+                <button
+                  type="button"
+                  aria-label="Toggle color-vision accessible heatmap colors"
+                  aria-pressed={displayMode === 'accessible'}
+                  onClick={() => setDisplayMode(prev => prev === 'default' ? 'accessible' : 'default')}
+                  className={`w-9 h-5 flex items-center rounded-full p-1 transition-colors duration-300 focus:outline-none ${
+                    displayMode === 'accessible' ? 'bg-blue-600' : 'bg-gray-300'
+                  }`}
                 >
-                  {isLoaded && heatmapData.length > 0 && (
-                    <HeatmapLayer
-                      data={heatmapData}
-                      options={heatmapOptions}
-                    />
-                  )}
-                  {isLoaded && (
-                    <>
-                      <Marker
-                        position={{
-                          lat: PHILADELPHIA_HS_FOR_GIRLS.lat,
-                          lng: PHILADELPHIA_HS_FOR_GIRLS.lng,
-                        }}
-                        zIndex={1000}
-                        title={PHILADELPHIA_HS_FOR_GIRLS.name}
-                        onClick={() => setSchoolPinOpen(true)}
-                        options={{
-                          label: {
-                            text: PHILADELPHIA_HS_FOR_GIRLS.shortLabel,
-                            color: '#ffffff',
-                            fontSize: '11px',
-                            fontWeight: '700',
-                          },
-                        }}
-                      />
-                      {schoolPinOpen && (
-                        <InfoWindow
-                          position={{
-                            lat: PHILADELPHIA_HS_FOR_GIRLS.lat,
-                            lng: PHILADELPHIA_HS_FOR_GIRLS.lng,
-                          }}
-                          onCloseClick={() => setSchoolPinOpen(false)}
-                        >
-                          <div className="max-w-[240px] pr-1">
-                            <p className="font-bold text-gray-900 text-sm leading-snug">
-                              {PHILADELPHIA_HS_FOR_GIRLS.name}
-                            </p>
-                            <p className="text-xs text-gray-600 mt-1">{PHILADELPHIA_HS_FOR_GIRLS.address}</p>
-                            <p className="text-[10px] text-gray-500 mt-2">Partner school (program pin)</p>
-                          </div>
-                        </InfoWindow>
-                      )}
-                    </>
-                  )}
-                </GoogleMap>
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-gray-50">
-                  <p className="text-sm text-gray-600 font-medium">Loading map…</p>
-                </div>
-              )
-            ) : (
-              <div className="w-full h-full flex items-center justify-center bg-gray-100">
-                <div className="text-center p-6">
-                  <p className="text-lg font-semibold text-gray-700 mb-2">Google Maps API Key Required</p>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Please set REACT_APP_GOOGLE_MAPS_API_KEY in your .env file
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Get your API key from{' '}
-                    <a 
-                      href="https://console.cloud.google.com/google/maps-apis" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-700 underline"
-                    >
-                      Google Cloud Console
-                    </a>
-                  </p>
-                  </div>
+                  <span
+                    className={`bg-white w-3 h-3 rounded-full shadow-md transform transition-transform duration-300 ${
+                      displayMode === 'accessible' ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
-            )}
-
-            {mapsLoadError && (
-              <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20">
-                <div className="max-w-lg mx-auto px-6 py-5 bg-white border border-rose-200 rounded-2xl shadow-sm">
-                  <p className="text-base font-bold text-rose-700 mb-2">Map loading error</p>
-                  <p className="text-sm text-gray-700">{mapsLoadError}</p>
-                  <p className="text-xs text-gray-500 mt-3">
-                    Tip: In Google Cloud Console, enable “Maps JavaScript API” and restrict the key to
-                    <span className="font-mono"> https://haetalkim.github.io/airstory/*</span>.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {isLoaded && heatmapData.length === 0 && (
-              <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-10 pointer-events-none">
-                <div className="bg-white border border-gray-200 rounded-xl px-6 py-4 shadow-sm">
-                  <p className="text-lg font-bold text-gray-800 text-center">NO DATA</p>
-                  <p className="text-xs text-gray-500 text-center mt-1">
-                    No geotagged measurements for the current metric/filter.
-                  </p>
-                </div>
-              </div>
-            )}
-            
-            {/* Map Legend - Continuous Gradient */}
-            <div className="absolute bottom-4 left-4 bg-white rounded-lg p-5 shadow-lg border border-gray-200 z-10 min-w-[280px]">
-              <p className="text-sm font-semibold text-gray-700 mb-3">Air Quality Gradient</p>
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-64 h-5 rounded overflow-hidden" style={{
-                  background: `linear-gradient(to right, ${(displayMode === 'accessible' ? accessibleGradient : heatmapGradient).slice(1).join(', ')})`
-                }} />
-              </div>
-              <div className="flex justify-between text-xs text-gray-600 mb-2">
-                <span className="whitespace-nowrap">Good</span>
-                <span className="whitespace-nowrap">Moderate</span>
-                <span className="whitespace-nowrap">Unhealthy</span>
-                <span className="whitespace-nowrap">Very Unhealthy</span>
-              </div>
-              <p className="text-xs text-gray-500 italic">Weighted by AQI value</p>
-            </div>
-          </div>
-          
-          <p className="text-xs text-gray-500 mt-4 text-center">
-            * OpenAQ heat zones • Graduation control (top-right): jump to {PHILADELPHIA_HS_FOR_GIRLS.shortLabel} • Pin: tap for details
-          </p>
+            </>
+          )}
+          <button
+            onClick={handleShareScreenshot}
+            disabled={isCapturing}
+            className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+            <span className="hidden lg:inline">{isCapturing ? 'Capturing…' : 'Save map'}</span>
+          </button>
         </div>
 
-        {/* Stats Sidebar - 1 column */}
-        <div className="flex flex-col gap-4 h-full">
-          {/* City Average */}
-          <div 
-            className="bg-white rounded-xl p-5 shadow-md border-2 transition-all duration-300 flex-1 flex flex-col justify-center" 
-            style={{ borderColor: theme.primary }}
-          >
-            <div className="flex justify-between items-start mb-2">
-              <p className="text-sm font-black text-gray-500 uppercase tracking-widest">City Average</p>
-              <div className="text-right">
-                <span className="text-3xl font-semibold" style={{ color: theme.primary }}>
-                  {stats.city ?? 'NO DATA'}
-                </span>
-                {stats.city != null && (
-                  <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
+        {/* The map is the page; summaries are compact overlays, not a separate column. */}
+        <div className="h-full">
+          {/* Map */}
+          <div className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white">
+            {showHeatmap && usingOpenAQHeatmap && (
+              <p className="absolute left-4 top-20 z-20 max-w-sm rounded-lg bg-white/90 px-2.5 py-1.5 text-[10px] font-medium text-emerald-700 shadow backdrop-blur">
+                Visualization source: OpenAQ sensors near {selectedCity.city}.
+              </p>
+            )}
+
+            <div
+              className="relative h-full flex-1 overflow-hidden"
+            >
+              <MapView
+                ref={mapInstanceRef}
+                initialViewState={{
+                  longitude: mapCenter.lng,
+                  latitude: mapCenter.lat,
+                  zoom: 12,
+                }}
+                mapStyle={MAP_STYLE_URL}
+                style={{ width: '100%', height: '100%' }}
+                onLoad={() => {
+                  setIsLoaded(true);
+                  setMapLoadError('');
+                }}
+                onError={(event) => {
+                  if (!isLoaded) {
+                    setMapLoadError(event?.error?.message || 'The map style or tiles failed to load.');
+                  }
+                }}
+                onRemove={() => setIsLoaded(false)}
+              >
+                <NavigationControl position="top-right" showCompass={false} />
+                <FullscreenControl position="top-right" />
+
+                {showHeatmap && heatmapData.features.length > 0 && (
+                  <Source id="air-quality-data" type="geojson" data={heatmapData}>
+                    <Layer {...heatmapLayer} />
+                  </Source>
                 )}
-              </div>
-            </div>
-            <div className="flex items-center justify-between mt-1">
-              {stats.city == null ? (
-                <span className="px-3 py-1 rounded-full text-xs font-black tracking-wide bg-gray-100 text-gray-500">
-                  NO DATA
-                </span>
-              ) : (
-                <>
-                  <span
-                    className="px-3 py-1 rounded-full text-xs font-black tracking-wide"
-                    style={{ backgroundColor: getColorForValue(stats.city), color: "#1F2937" }}
+
+                {trailData.features.length > 0 && (
+                  <Source id="measurement-trail-data" type="geojson" data={trailData}>
+                    <Layer {...trailLayer} />
+                  </Source>
+                )}
+
+                {userLocation && (
+                  <Marker longitude={userLocation.lng} latitude={userLocation.lat} anchor="center">
+                    <div
+                      className="h-4 w-4 rounded-full border-2 border-white bg-sky-500 shadow-[0_0_0_5px_rgba(14,165,233,0.25)]"
+                      title="Your current location"
+                      aria-label="Your current location"
+                    />
+                  </Marker>
+                )}
+
+                {activeSchoolPin && (
+                  <Marker
+                    longitude={activeSchoolPin.lng}
+                    latitude={activeSchoolPin.lat}
+                    anchor="bottom"
                   >
-                    {getStatusLabel(stats.city)}
-                  </span>
-                  <button
-                    onClick={() => setShowStatusInfo(true)}
-                    className="p-1.5 hover:bg-gray-100 rounded-full transition-colors"
-                    title="View AQI criteria"
+                    <button
+                      type="button"
+                      title={activeSchoolPin.name}
+                      aria-label={`Show ${activeSchoolPin.name}`}
+                      onClick={() => setSchoolPinOpen(true)}
+                      className="flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-blue-600 px-2 text-[10px] font-bold text-white shadow-lg"
+                    >
+                      {activeSchoolPin.shortLabel}
+                    </button>
+                  </Marker>
+                )}
+
+                {activeSchoolPin && schoolPinOpen && (
+                  <Popup
+                    longitude={activeSchoolPin.lng}
+                    latitude={activeSchoolPin.lat}
+                    anchor="bottom"
+                    offset={44}
+                    closeOnClick={false}
+                    onClose={() => setSchoolPinOpen(false)}
                   >
-                    <Info className="w-5 h-5 text-gray-400" />
-                  </button>
-                </>
+                    <div className="max-w-[240px] pr-1">
+                      <p className="text-sm font-bold leading-snug text-gray-900">
+                        {activeSchoolPin.name}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-600">{activeSchoolPin.address}</p>
+                      <p className="mt-2 text-[10px] text-gray-500">
+                        {filters.school ? 'Your class\'s school' : 'Program pin (no school assigned yet)'}
+                      </p>
+                    </div>
+                  </Popup>
+                )}
+              </MapView>
+
+              {activeSchoolPin && (
+                <button
+                  type="button"
+                  title="Go to your school"
+                  aria-label="Center map on your school"
+                  onClick={focusSchool}
+                  className="absolute right-12 top-2.5 z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50"
+                >
+                  <GraduationCap className="h-5 w-5" />
+                </button>
+              )}
+              <button
+                type="button"
+                title="Go to my location"
+                aria-label={isLocating ? 'Finding your location' : 'Center map on your location'}
+                onClick={focusMyLocation}
+                disabled={isLocating}
+                className="absolute right-[5.5rem] top-2.5 z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50 disabled:cursor-wait disabled:text-sky-500"
+              >
+                <LocateFixed className={`h-5 w-5 ${isLocating ? 'animate-pulse' : ''}`} />
+              </button>
+
+              {geoError && (
+                <button
+                  type="button"
+                  role="status"
+                  onClick={() => setGeoError('')}
+                  className="absolute right-3 top-14 z-20 max-w-xs rounded-lg border border-amber-200 bg-white/95 px-3 py-2 text-left text-xs text-amber-800 shadow-lg backdrop-blur"
+                  title="Dismiss"
+                >
+                  {geoError} Click to dismiss.
+                </button>
+              )}
+
+              {mapLoadError && (
+                <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20">
+                  <div className="max-w-lg mx-auto px-6 py-5 bg-white border border-rose-200 rounded-2xl shadow-sm">
+                    <p className="text-base font-bold text-rose-700 mb-2">Map loading error</p>
+                    <p className="text-sm text-gray-700">{mapLoadError}</p>
+                    <p className="text-xs text-gray-500 mt-3">
+                      Check the configured map style URL and your network connection.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {showHeatmap && isLoaded && openaqStatus !== 'loading' && heatmapData.features.length === 0 && (
+                <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2">
+                  <div className="rounded-xl border border-amber-200 bg-white/95 px-6 py-4 shadow-lg backdrop-blur">
+                    <p className="text-center text-sm font-bold text-gray-800">No OpenAQ reference data</p>
+                    <p className="mt-1 text-center text-xs text-gray-500">
+                      {openaqStatus === 'error'
+                        ? 'The reference service could not be reached. Student trails are still available.'
+                        : `No ${metricThemes[selectedMetric].label} readings were found near ${selectedCity.label}.`}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Map Legend - Continuous Gradient */}
+              {showHeatmap && heatmapData.features.length > 0 && (
+                <div className="absolute bottom-3 left-3 z-10 min-w-[220px] rounded-lg border border-gray-200 bg-white/95 p-2.5 shadow-lg backdrop-blur sm:bottom-4 sm:left-4">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Air Quality Gradient</p>
+                  <div className="w-56 h-4 rounded overflow-hidden mb-2" style={{
+                    background: `linear-gradient(to right, ${(displayMode === 'accessible' ? accessibleGradient : heatmapGradient).slice(1).join(', ')})`
+                  }} />
+                  <div className="flex justify-between text-[10px] text-gray-600">
+                    <span>Good</span>
+                    <span>Moderate</span>
+                    <span>Unhealthy</span>
+                    <span>Very Unhealthy</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Trail legend — team colors (class scope) or school colors (school/public scope) */}
+              {trailLegendItems.length > 0 && (
+                <div className={`absolute left-3 z-10 max-w-[220px] rounded-lg border border-gray-200 bg-white/95 p-2.5 shadow-lg backdrop-blur ${
+                  showHeatmap && heatmapData.features.length > 0
+                    ? 'bottom-28 sm:bottom-4 sm:left-[270px]'
+                    : 'bottom-3 sm:bottom-4 sm:left-4'
+                }`}>
+                  <p className="text-xs font-semibold text-gray-700 mb-2">
+                    {workspaceKind === 'class' ? 'Team trails' : 'School trails'}
+                  </p>
+                  <div className="space-y-1 max-h-28 overflow-y-auto">
+                    {trailLegendItems.map((item) => (
+                      <div key={item.label} className="flex items-center gap-2 text-[11px] text-gray-600">
+                        <span className="w-3 h-0.5 rounded" style={{ backgroundColor: item.color }} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           </div>
 
-          {/* School Average */}
-          <div 
-            className="bg-white rounded-xl p-5 shadow-md border-2 border-blue-100 flex-1 flex flex-col justify-center"
-          >
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="text-sm font-black text-gray-500 uppercase tracking-widest">School Average</p>
-                <p className="text-xs text-blue-500 font-black uppercase mt-0.5 tracking-tighter">{filters.school}</p>
-              </div>
-              <div className="text-right">
-                <span className="text-2xl font-semibold text-blue-600">{stats.school ?? 'NO DATA'}</span>
-                {stats.school != null && (
-                  <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
+          {/* Compact summary cards float over the map as information panels. */}
+          <div className="absolute right-3 top-20 z-20 hidden w-44 flex-col gap-1.5 lg:flex">
+            {showHeatmap && (
+              <div
+                className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                style={{ borderColor: theme.primary }}
+              >
+                <div className="flex justify-between items-start">
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">City Avg</p>
+                  <button onClick={() => setShowStatusInfo(true)} title="View AQI criteria">
+                    <Info className="w-3.5 h-3.5 text-gray-400" />
+                  </button>
+                </div>
+                <div className="flex items-baseline gap-1 mt-1">
+                  <span className="text-lg font-bold" style={{ color: theme.primary }}>{stats.city ?? '—'}</span>
+                  {stats.city != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
+                </div>
+                {stats.city != null && (
+                  <span
+                    className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                    style={{ backgroundColor: getColorForValue(stats.city), color: '#1F2937' }}
+                  >
+                    {getStatusLabel(stats.city)}
+                  </span>
                 )}
               </div>
-            </div>
-          </div>
+            )}
 
-          {/* Group Average */}
-          <div 
-            className="bg-white rounded-xl p-5 shadow-md border-2 border-indigo-100 flex-1 flex flex-col justify-center"
-          >
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="text-sm font-black text-gray-500 uppercase tracking-widest">Group Average</p>
-                <p className="text-xs text-indigo-500 font-black uppercase mt-0.5 tracking-tighter">Team {filters.group}</p>
-              </div>
-              <div className="text-right">
-                <span className="text-2xl font-semibold text-indigo-600">{stats.group ?? 'NO DATA'}</span>
-                {stats.group != null && (
-                  <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
-                )}
+            <div className="min-w-[145px] rounded-lg border border-blue-100 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">School Avg</p>
+              <p className="text-[10px] text-blue-500 font-bold uppercase truncate">{filters.school || '—'}</p>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-lg font-bold text-blue-600">{stats.school ?? '—'}</span>
+                {stats.school != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
               </div>
             </div>
+
+            <div className="min-w-[145px] rounded-lg border border-indigo-100 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Team Avg</p>
+              <p className="text-[10px] text-indigo-500 font-bold uppercase truncate">Team {filters.group || '—'}</p>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-lg font-bold text-indigo-600">{stats.group ?? '—'}</span>
+                {stats.group != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
+              </div>
+            </div>
+
+            {bestLocation && worstLocation && (
+              <>
+                <div
+                  className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                  style={{
+                    background: `linear-gradient(135deg, ${getColorForValue(bestLocation[selectedMetric])}30 0%, white 100%)`,
+                    borderColor: getColorForValue(bestLocation[selectedMetric]),
+                  }}
+                >
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Best Area</p>
+                  <p className="text-[10px] text-green-600 font-bold uppercase truncate">{bestLocation.name}</p>
+                  <div className="flex items-baseline gap-1 mt-1">
+                    <span className="text-lg font-bold text-green-600">{Number(bestLocation[selectedMetric]).toFixed(1)}</span>
+                    <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>
+                  </div>
+                </div>
+
+                <div
+                  className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                  style={{
+                    background: `linear-gradient(135deg, ${getColorForValue(worstLocation[selectedMetric])}30 0%, white 100%)`,
+                    borderColor: getColorForValue(worstLocation[selectedMetric]),
+                  }}
+                >
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Needs Attention</p>
+                  <p className="text-[10px] text-orange-600 font-bold uppercase truncate">{worstLocation.name}</p>
+                  <div className="flex items-baseline gap-1 mt-1">
+                    <span className="text-lg font-bold text-orange-600">{Number(worstLocation[selectedMetric]).toFixed(1)}</span>
+                    <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-
-          {/* Best Area / Needs Attention — hidden if no location aggregates */}
-          {bestLocation && worstLocation && (
-            <>
-              <div
-                className="bg-gradient-to-br rounded-xl p-5 shadow-md border-2 transition-all duration-300 flex-1 flex flex-col justify-center"
-                style={{
-                  background: `linear-gradient(135deg, ${getColorForValue(bestLocation[selectedMetric])}30 0%, white 100%)`,
-                  borderColor: getColorForValue(bestLocation[selectedMetric]),
-                }}
-              >
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-sm font-black text-gray-500 uppercase tracking-widest">Best Area</p>
-                    <p className="text-xs text-green-600 font-black uppercase mt-0.5 tracking-tighter truncate max-w-[120px]">
-                      {bestLocation.name}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-2xl font-semibold text-green-600">{Number(bestLocation[selectedMetric]).toFixed(2)}</span>
-                    <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
-                  </div>
-                </div>
+          <div className="absolute right-3 top-20 z-20 flex max-w-[48%] flex-wrap justify-end gap-1 lg:hidden">
+            {[
+              ...(showHeatmap ? [['City', stats.city, theme.primary]] : []),
+              ['School', stats.school, '#2563EB'],
+              ['Team', stats.group, '#4F46E5'],
+            ].map(([label, value, color]) => (
+              <div key={label} className="rounded-lg border bg-white/95 px-2 py-1 shadow backdrop-blur">
+                <span className="mr-1 text-[9px] font-bold uppercase text-gray-500">{label}</span>
+                <span className="text-xs font-bold" style={{ color }}>{value ?? '—'}</span>
               </div>
-
-              <div
-                className="bg-gradient-to-br rounded-xl p-5 shadow-md border-2 transition-all duration-300 flex-1 flex flex-col justify-center"
-                style={{
-                  background: `linear-gradient(135deg, ${getColorForValue(worstLocation[selectedMetric])}30 0%, white 100%)`,
-                  borderColor: getColorForValue(worstLocation[selectedMetric]),
-                }}
-              >
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-sm font-black text-gray-500 uppercase tracking-widest">Needs Attention</p>
-                    <p className="text-xs text-orange-600 font-black uppercase mt-0.5 tracking-tighter truncate max-w-[120px]">
-                      {worstLocation.name}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-2xl font-semibold text-orange-600">{Number(worstLocation[selectedMetric]).toFixed(2)}</span>
-                    <span className="text-sm font-bold text-gray-400 ml-1">{metricThemes[selectedMetric].unit}</span>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
+            ))}
           </div>
         </div>
       </div>
       {/* End Screenshot Container */}
 
       {/* Status Info Modal */}
-      <StatusInfoModal 
-        isOpen={showStatusInfo} 
-        onClose={() => setShowStatusInfo(false)} 
+      <StatusInfoModal
+        isOpen={showStatusInfo}
+        onClose={() => setShowStatusInfo(false)}
         theme={theme}
       />
     </div>

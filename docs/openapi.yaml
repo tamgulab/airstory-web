@@ -134,7 +134,17 @@ components:
           format: uuid
         name:
           type: string
-          example: Lincoln High School
+          example: Abraham Lincoln High School
+        latitude:
+          type: number
+          format: double
+          nullable: true
+          description: Map pin latitude. Null for schools that haven't been located yet.
+        longitude:
+          type: number
+          format: double
+          nullable: true
+          description: Map pin longitude. Null for schools that haven't been located yet.
 
     ClassStructure:
       type: object
@@ -410,8 +420,9 @@ paths:
       tags: [Schools]
       summary: List schools from the internal directory
       description: >
-        Backs the account-settings school picker. Optional `q` filters by name
-        (case-insensitive substring); otherwise the full directory is returned.
+        Backs the account-settings school picker. Returns only schools with map coordinates,
+        ensuring every selectable class school has a map pin. Optional `q` filters by name
+        (case-insensitive substring); otherwise the full located directory is returned.
       parameters:
         - name: q
           in: query

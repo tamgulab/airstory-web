@@ -5,9 +5,10 @@ import OnboardingForm from "./components/OnboardingForm";
 import HeatMapDashboard from "./components/HeatMapDashboard";
 import RawDataView from "./components/RawDataView";
 import AnalysisView from "./components/AnalysisView";
+import WorkspaceView from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users } from "lucide-react";
+import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -133,6 +134,28 @@ export default function App() {
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
   const [onboardingError, setOnboardingError] = useState("");
   const [importedDataVersion, setImportedDataVersion] = useState(0);
+  /** CODAP-inspired Workspace tab: session-only saved charts (from Analysis's "Send to Workspace" or the builder). */
+  const [workspaceItems, setWorkspaceItems] = useState([]);
+  const handleAddWorkspaceItem = useCallback((item) => {
+    setWorkspaceItems((prev) => {
+      const index = prev.length;
+      const layout = item.layout || {
+        x: 28 + (index % 3) * 390,
+        y: 28 + Math.floor(index / 3) * 330,
+        width: item.kind === "note" ? 320 : 370,
+        height: item.kind === "note" ? 220 : 310,
+      };
+      return [...prev, { ...item, layout }].slice(-24);
+    });
+  }, []);
+  const handleRemoveWorkspaceItem = useCallback((id) => {
+    setWorkspaceItems((prev) => prev.filter((i) => i.id !== id));
+  }, []);
+  const handleUpdateWorkspaceItem = useCallback((id, patch) => {
+    setWorkspaceItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    );
+  }, []);
   /** Server profile placement snapshot; only when this changes do we overwrite student explorer filters (CSV / drill-down). */
   const lastProfileHierarchySnapRef = useRef("");
   const [filters, setFilters] = useState({
@@ -621,10 +644,10 @@ export default function App() {
     return m.workspace_name || "Workspace";
   };
 
-  // Sidebar icon: emoji for the aggregate workspaces, up to two initials for a class.
+  // Sidebar icon: vector symbols for aggregate workspaces, up to two initials for a class.
   const workspaceIcon = (m) => {
-    if (m.kind === "public") return "🌐";
-    if (m.kind === "school") return "🏫";
+    if (m.kind === "public") return <Globe2 className="h-5 w-5" aria-hidden="true" />;
+    if (m.kind === "school") return <GraduationCap className="h-5 w-5" aria-hidden="true" />;
     const name = (m.workspace_name || "").trim();
     const parts = name.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
@@ -653,12 +676,14 @@ export default function App() {
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
         { id: 'mypage', label: 'My Page', icon: User },
       ]
     : [
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
         { id: 'mypage', label: 'My Page', icon: User },
       ];
 
@@ -828,17 +853,7 @@ export default function App() {
               className="flex items-center gap-3 focus:outline-none hover:opacity-80 transition-opacity"
               aria-label="Go to Heat Map"
             >
-              <img 
-                src="/logo.svg" 
-                alt="AirStory"
-                className="h-12 w-auto"
-                onError={(e) => {
-                  // Fallback to text if image fails to load
-                  e.target.style.display = 'none';
-                  e.target.nextSibling.style.display = 'block';
-                }}
-              />
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight" style={{display: 'none'}}>
+              <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
                 AirStory
               </h1>
             </button>
@@ -901,10 +916,20 @@ export default function App() {
       </nav>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main
+        className={
+          activeSection === 'heatmap'
+            ? 'w-full flex-1 px-3 py-3 sm:px-4'
+            : activeSection === 'workspace'
+              ? 'w-full flex-1 px-4 py-6'
+              : 'w-full max-w-7xl mx-auto px-6 py-8'
+        }
+      >
         {activeSection === 'heatmap' && (
           <HeatMapDashboard
             workspaceId={workspaceId}
+            workspaceKind={currentWorkspaceKind}
+            schoolId={currentMembership?.school_id || null}
             selectedMetric={selectedMetric}
             setSelectedMetric={setSelectedMetric}
             filters={filters}
@@ -938,6 +963,19 @@ export default function App() {
             metricThemes={METRIC_THEMES}
             importedDataVersion={importedDataVersion}
             classStructure={classStructure}
+            onSendToWorkspace={handleAddWorkspaceItem}
+          />
+        )}
+        {activeSection === 'workspace' && (
+          <WorkspaceView
+            filters={filters}
+            theme={currentTheme}
+            metricThemes={METRIC_THEMES}
+            importedDataVersion={importedDataVersion}
+            workspaceItems={workspaceItems}
+            onAddItem={handleAddWorkspaceItem}
+            onRemoveItem={handleRemoveWorkspaceItem}
+            onUpdateItem={handleUpdateWorkspaceItem}
           />
         )}
         {activeSection === 'mypage' && (

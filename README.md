@@ -74,7 +74,7 @@ npm install
 npm start              # runs on http://localhost:3000
 ```
 
-The frontend automatically points at `http://localhost:4000/api` on localhost — leave `REACT_APP_API_BASE_URL` blank for local dev. `REACT_APP_GOOGLE_MAPS_API_KEY` is only needed for the heat-map view.
+The frontend automatically points at `http://localhost:4000/api` on localhost — leave `REACT_APP_API_BASE_URL` blank for local dev. The heat-map view uses MapLibre with a keyless default style; set `REACT_APP_MAP_STYLE_URL` only to use a different compatible style.
 
 ### 5. Log in
 

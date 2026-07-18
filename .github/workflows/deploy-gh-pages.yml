@@ -44,22 +44,10 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Verify Google Maps key (CRA bakes this at build time)
-        env:
-          MAPS: ${{ secrets.REACT_APP_GOOGLE_MAPS_API_KEY }}
-        run: |
-          if [ -z "$MAPS" ]; then
-            echo "::error::REACT_APP_GOOGLE_MAPS_API_KEY is missing."
-            echo "Add it in THIS repo (e.g. airstory): Settings → Secrets and variables → Actions → New repository secret."
-            echo "Name must be exactly: REACT_APP_GOOGLE_MAPS_API_KEY"
-            echo "Or add the same name under Environments → github-pages (this job uses that environment)."
-            exit 1
-          fi
-
       - name: Build
         env:
           REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL || 'https://air-sensor-api.onrender.com/api' }}
-          REACT_APP_GOOGLE_MAPS_API_KEY: ${{ secrets.REACT_APP_GOOGLE_MAPS_API_KEY }}
+          REACT_APP_MAP_STYLE_URL: ${{ vars.REACT_APP_MAP_STYLE_URL }}
         run: npm run build
 
       - name: Upload Pages artifact

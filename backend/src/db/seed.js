@@ -26,7 +26,7 @@ async function ensureFirebaseUser(email, password, displayName) {
 }
 
 const WORKSPACE_NAME = "Ms. Rivera's Science Class"; // a class workspace (distinct from the school)
-const SCHOOL_NAME = "Lincoln High School"; // must match a row in the schools directory (006_schools.sql)
+const SCHOOL_NAME = "Abraham Lincoln High School"; // located program school (009_program_school_catalog.sql)
 const SCHOOL_CODE = "LINCOLN";
 const INSTRUCTOR_NAME = "Ms. Rivera";
 

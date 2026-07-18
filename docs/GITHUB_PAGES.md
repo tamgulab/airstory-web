@@ -22,15 +22,13 @@ Do **not** keep GitHub’s template workflow that uploads **`path: '.'`** (whole
 | Name | Purpose |
 |------|--------|
 | `REACT_APP_API_BASE_URL` | Full API base URL ending in `/api`, e.g. `https://air-sensor-api.onrender.com/api`. If omitted, the workflow uses the same default as [DEPLOY_RENDER.md](DEPLOY_RENDER.md). |
-| `REACT_APP_GOOGLE_MAPS_API_KEY` | **Required for the heat map** (embedded at `npm run build`). Without it, the app shows “Google Maps API Key Required”. Same value as local `.env`. |
+| `REACT_APP_MAP_STYLE_URL` | Optional repository variable for a custom MapLibre-compatible style. The app defaults to OpenFreeMap's keyless Liberty style. |
 
 GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
 
 **Important:** The site is built on **GitHub Actions**, not on your laptop — **local `.env` is never uploaded.** You must create the secret on the **same repo** that hosts the site (e.g. `haetalkim/airstory`), not only on another fork/clone.
 
-The workflow’s **build** job uses the **`github-pages` environment**, so you can put this key either as a **repository** Actions secret or as an **environment** secret on `github-pages`.
-
-**Google Cloud Console** (API key restrictions): allow HTTP referrers for your Pages URL, e.g. `https://haetalkim.github.io/airstory/*` (and `http://localhost:*` for dev). Enable **Maps JavaScript API** (and billing if prompted).
+The workflow’s **build** job uses the **`github-pages` environment**. If you override the map style, add `REACT_APP_MAP_STYLE_URL` under **Settings → Secrets and variables → Actions → Variables**. No map API key is required for the default style.
 
 ### GitHub Pages settings (must match this workflow)
 

@@ -67,6 +67,7 @@ test('opens recent and trends by default and exposes one Compare Data tab', asyn
       importedDataVersion={0}
       classStructure={{}}
       onSendToWorkspace={jest.fn()}
+      userRole="student"
     />
   );
 
@@ -78,4 +79,52 @@ test('opens recent and trends by default and exposes one Compare Data tab', asyn
   await waitFor(() => expect(apiRequest).toHaveBeenCalled());
   fireEvent.click(compareButtons[0]);
   expect(screen.getByRole('heading', { name: /your recent week comparison/i })).toBeInTheDocument();
+});
+
+test('still analyzes data when school directory name does not match CSV school code', () => {
+  apiRequest.mockResolvedValue({ points: [] });
+  render(
+    <AnalysisView
+      selectedMetric="pm25"
+      setSelectedMetric={jest.fn()}
+      filters={{
+        school: 'Abraham Lincoln High School',
+        instructor: 'Other Teacher',
+        period: '9',
+        group: 'Z',
+      }}
+      theme={{ primary: '#059669', light: '#ecfdf5', bg: 'bg-emerald-600', hover: 'hover:bg-emerald-700' }}
+      metricThemes={metricThemes}
+      importedDataVersion={0}
+      classStructure={{}}
+      onSendToWorkspace={jest.fn()}
+      userRole="student"
+    />
+  );
+
+  expect(screen.queryByRole('heading', { name: /no data for analysis yet/i })).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /your measurements over time/i })).toBeInTheDocument();
+});
+
+test('teachers get period and group focus controls that narrow analysis data', () => {
+  const getImported = jest.requireMock('../utils/importedData').getImportedMeasurements;
+  // Keep the shared mock returning multi-group rows via the existing factory shape.
+  expect(typeof getImported).toBe('function');
+
+  render(
+    <AnalysisView
+      selectedMetric="pm25"
+      setSelectedMetric={jest.fn()}
+      filters={{ school: 'Test School', instructor: 'Teacher', period: '1', group: '' }}
+      theme={{ primary: '#059669', light: '#ecfdf5', bg: 'bg-emerald-600', hover: 'hover:bg-emerald-700' }}
+      metricThemes={metricThemes}
+      importedDataVersion={0}
+      classStructure={{ periods: ['1'], groupsByPeriod: { 1: ['A', 'B'] } }}
+      onSendToWorkspace={jest.fn()}
+      userRole="teacher"
+    />
+  );
+
+  expect(screen.getByLabelText(/focus period for analysis/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/focus group for analysis/i)).toBeInTheDocument();
 });

@@ -1,4 +1,6 @@
 const IMPORTED_MEASUREMENTS_KEY = "air_imported_measurements_v1";
+/** sessionStorage: 'local-import' | 'server' — blocks poll/reload from wiping a CSV the user just loaded. */
+const IMPORTED_MEASUREMENTS_SOURCE_KEY = "air_imported_measurements_source_v1";
 
 function normalizeHeader(value) {
   return String(value || "")
@@ -72,8 +74,21 @@ export function uniqueHierarchyFromImportedRows(rows) {
   return out;
 }
 
-export function setImportedMeasurements(data) {
-  localStorage.setItem(IMPORTED_MEASUREMENTS_KEY, JSON.stringify(data || []));
+export function setImportedMeasurements(data, { source = "server" } = {}) {
+  const payload = JSON.stringify(data || []);
+  try {
+    localStorage.setItem(IMPORTED_MEASUREMENTS_KEY, payload);
+  } catch (err) {
+    // Quota / private mode — never leave callers thinking the cache was replaced.
+    console.warn("Failed to persist measurement cache", err);
+    return false;
+  }
+  try {
+    sessionStorage.setItem(IMPORTED_MEASUREMENTS_SOURCE_KEY, source);
+  } catch {
+    // sessionStorage may be unavailable; localStorage write still succeeded.
+  }
+  return true;
 }
 
 export function getImportedMeasurements() {
@@ -87,8 +102,22 @@ export function getImportedMeasurements() {
   }
 }
 
+/** True while the browser cache is a user CSV import that has not been confirmed from the API. */
+export function isLocalImportCache() {
+  try {
+    return sessionStorage.getItem(IMPORTED_MEASUREMENTS_SOURCE_KEY) === "local-import";
+  } catch {
+    return false;
+  }
+}
+
 export function clearImportedMeasurements() {
   localStorage.removeItem(IMPORTED_MEASUREMENTS_KEY);
+  try {
+    sessionStorage.removeItem(IMPORTED_MEASUREMENTS_SOURCE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 export function parseImportedCsvRaw(csvText) {

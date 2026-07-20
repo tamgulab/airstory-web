@@ -5,10 +5,11 @@ import MapView, {
 } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import html2canvas from 'html2canvas';
-import { getImportedMeasurements } from '../utils/importedData';
+import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
 import { getSchools } from '../api/schools';
 import { apiRequest } from '../api/http';
 import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
+import { buildTeamTrailSegments, preferPointsNearSchool } from '../utils/trails';
 
 const MAP_STYLE_URL =
   process.env.REACT_APP_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
@@ -53,18 +54,22 @@ const accessibleGradient = [
   'rgba(255, 255, 255, 1)'
 ];
 
+const SCHOOL_LABEL_SKIP = new Set(['of', 'the', 'for', 'and', 'a', 'an', 'at', 'in']);
+
 /** Short label for the map pin/control from a school name, e.g. "Lincoln High School" -> "LHS". */
 function shortLabelFromSchoolName(name) {
   const initials = String(name || '')
     .split(/\s+/)
-    .filter((w) => /^[A-Za-z]/.test(w))
+    .filter((w) => /^[A-Za-z]/.test(w) && !SCHOOL_LABEL_SKIP.has(w.toLowerCase()))
     .map((w) => w[0].toUpperCase())
     .join('');
   return initials.slice(0, 4) || 'SCH';
 }
 
 /** Zoom when jumping to the partner school from the map control. */
+/** Built-in campus view — tight enough to read the school block, not the whole borough. */
 const SCHOOL_FOCUS_ZOOM = 16;
+const DEFAULT_MAP_ZOOM = 15;
 
 const StatusInfoModal = ({ isOpen, onClose, theme }) => {
   if (!isOpen) return null;
@@ -130,7 +135,7 @@ const StatusInfoModal = ({ isOpen, onClose, theme }) => {
 };
 
 const HeatMapDashboard = ({
-  workspaceKind = 'class', // 'class' | 'school' | 'public' — drives trail color scope
+  workspaceKind = 'class', // 'class' | 'school' | 'public' — workspace context from App
   schoolId = null,
   selectedMetric,
   setSelectedMetric,
@@ -142,6 +147,8 @@ const HeatMapDashboard = ({
   const [showStatusInfo, setShowStatusInfo] = useState(false);
   const [selectedTimeRange] = useState('all-time');
   const [displayMode, setDisplayMode] = useState('default'); // 'default' or 'accessible'
+  // Trail compare scope (mirrors Raw Data Group/Class/School) — always drawn from geotagged raw rows.
+  const [trailScope, setTrailScope] = useState('class'); // 'team' | 'class' | 'school'
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [selectedCityId, setSelectedCityId] = useState(PRESET_CITIES[0].id);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -231,8 +238,11 @@ const HeatMapDashboard = ({
         });
         const data = await apiRequest(`/analytics/openaq/heatmap?${q.toString()}`);
         if (cancelled) return;
-        setOpenaqHeatmap({ points: data.points || [] });
-        setOpenaqStatus('success');
+        setOpenaqHeatmap({
+          points: data.points || [],
+          source: data.source || 'openaq',
+        });
+        setOpenaqStatus(data.points?.length ? 'success' : 'error');
       } catch {
         if (cancelled) return;
         setOpenaqHeatmap(null);
@@ -244,112 +254,139 @@ const HeatMapDashboard = ({
     };
   }, [showHeatmap, selectedMetric, selectedCity]);
 
-  const importedPoints = useMemo(() => {
-    return importedMeasurements
-      .filter((row) => {
-        if (filters.school && row.school && row.school !== filters.school) return false;
-        if (filters.instructor && row.instructor && row.instructor !== filters.instructor) return false;
-        if (filters.period && row.period && row.period !== filters.period) return false;
-        if (filters.group && row.group && row.group !== filters.group) return false;
-        return true;
-      })
-      .map((row) => {
-        const ts = row.capturedAt
-          ? new Date(row.capturedAt)
-          : new Date(`${row.date || '1970-01-01'}T${row.time || '00:00'}`);
-        return {
-          id: row.id,
-          name: row.location || 'Imported Location',
-          lat: Number(row.latitude),
-          lng: Number(row.longitude),
-          pm25: Number(row.pm25) || 0,
-          co: Number(row.co) || 0,
-          temp: Number(row.temp) || 0,
-          humidity: Number(row.humidity) || 0,
-          timestamp: ts,
-          school: row.school || '',
-          instructor: row.instructor || '',
-          period: row.period || '',
-          group: row.group || '',
-        };
-      })
-      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !Number.isNaN(p.timestamp.getTime()));
-  }, [importedMeasurements, filters]);
+  // Soft hierarchy: blank either side passes. School name is NOT hard-filtered —
+  // CSV school codes vs My Page directory names were emptying Heat Map while Raw Data /
+  // Analysis (which skip school-name match) still showed rows after refresh.
+  const softEq = useCallback((filterVal, rowVal) => {
+    if (isBlankHierarchyField(filterVal) || isBlankHierarchyField(rowVal)) return true;
+    return String(filterVal) === String(rowVal);
+  }, []);
 
-  // Trails use a wider (unfiltered-by-team) slice than the heat/aggregate view, so a class period
-  // can show every team's path — see the coloring rules below for how scope maps to color.
+  const rowToMapPoint = useCallback((row) => {
+    const ts = row.capturedAt
+      ? new Date(row.capturedAt)
+      : new Date(`${row.date || '1970-01-01'}T${row.time || '00:00'}`);
+    return {
+      id: row.id,
+      name: row.location || 'Imported Location',
+      lat: Number(row.latitude),
+      lng: Number(row.longitude),
+      pm25: Number(row.pm25) || 0,
+      co: Number(row.co) || 0,
+      temp: Number(row.temp) || 0,
+      humidity: Number(row.humidity) || 0,
+      timestamp: ts,
+      school: row.school || '',
+      instructor: row.instructor || '',
+      period: row.period || '',
+      group: row.group || '',
+      sessionId: row.sessionId || '',
+      date: row.date || '',
+    };
+  }, []);
+
+  const isGeotaggedPoint = useCallback(
+    (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !Number.isNaN(p.timestamp.getTime()),
+    []
+  );
+
+  const importedPoints = useMemo(() => {
+    const filtered = importedMeasurements.filter((row) => {
+      if (!softEq(filters.instructor, row.instructor)) return false;
+      if (!softEq(filters.period, row.period)) return false;
+      if (!softEq(filters.group, row.group)) return false;
+      return true;
+    });
+    const mapped = filtered.map(rowToMapPoint).filter(isGeotaggedPoint);
+    if (mapped.length) return mapped;
+    // Profile filters matched nothing — still show geotagged cache (same fallback as Analysis).
+    return importedMeasurements.map(rowToMapPoint).filter(isGeotaggedPoint);
+  }, [
+    importedMeasurements,
+    filters.instructor,
+    filters.period,
+    filters.group,
+    softEq,
+    rowToMapPoint,
+    isGeotaggedPoint,
+  ]);
+
+  // Trails always come from Raw Data geotagged rows. Scope matches Raw Data tabs:
+  // Team = current team only; Class = all teams in the period; School = all teams in the school.
   const trailScopedPoints = useMemo(() => {
-    return importedMeasurements
-      .filter((row) => {
-        if (workspaceKind === 'public') return true; // every school
-        // 'school' and 'class' both restrict to the current school; 'class' further restricts
-        // to the current period so only that period's teams are drawn (still all teams in it).
-        if (filters.school && row.school && row.school !== filters.school) return false;
-        if (workspaceKind === 'class') {
-          if (filters.instructor && row.instructor && row.instructor !== filters.instructor) return false;
-          if (filters.period && row.period && row.period !== filters.period) return false;
-        }
-        return true;
-      })
-      .map((row) => {
-        const ts = row.capturedAt
-          ? new Date(row.capturedAt)
-          : new Date(`${row.date || '1970-01-01'}T${row.time || '00:00'}`);
-        return {
-          lat: Number(row.latitude),
-          lng: Number(row.longitude),
-          timestamp: ts,
-          school: row.school || 'Unknown school',
-          instructor: row.instructor || '',
-          period: row.period || '',
-          group: row.group || 'Team',
-        };
-      })
-      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !Number.isNaN(p.timestamp.getTime()));
-  }, [importedMeasurements, filters.school, filters.instructor, filters.period, workspaceKind]);
+    const toTrailPoint = (row) => {
+      const base = rowToMapPoint(row);
+      return {
+        lat: base.lat,
+        lng: base.lng,
+        timestamp: base.timestamp,
+        sessionId: base.sessionId,
+        date: base.date,
+        school: base.school || 'Unknown school',
+        instructor: base.instructor,
+        period: base.period,
+        group: base.group || 'Team',
+      };
+    };
+
+    const matchesScope = (row) => {
+      if (workspaceKind === 'public') return true;
+      // Skip school-name equality (code vs display name). Pin proximity still focuses the map.
+      if (trailScope === 'school') return true;
+      if (!softEq(filters.instructor, row.instructor)) return false;
+      if (!softEq(filters.period, row.period)) return false;
+      if (trailScope === 'team' && !softEq(filters.group, row.group)) return false;
+      return true;
+    };
+
+    const scoped = importedMeasurements.filter(matchesScope).map(toTrailPoint).filter(isGeotaggedPoint);
+    if (scoped.length) return scoped;
+    return importedMeasurements.map(toTrailPoint).filter(isGeotaggedPoint);
+  }, [
+    importedMeasurements,
+    filters.instructor,
+    filters.period,
+    filters.group,
+    trailScope,
+    workspaceKind,
+    softEq,
+    rowToMapPoint,
+    isGeotaggedPoint,
+  ]);
+
+  const trailPointsForMap = useMemo(
+    () => preferPointsNearSchool(trailScopedPoints, activeSchoolPin),
+    [trailScopedPoints, activeSchoolPin]
+  );
 
   /**
-   * Group into one chronological path per team (school+instructor+period+group), then color by:
-   *  - 'class' scope: one color per team, so a period with several teams is easy to tell apart.
-   *  - 'school' scope: one color per school — since this view is a single school, every team's
-   *    path collapses to the same color (unified, not per-team).
-   *  - 'public' scope: one color per school, so different schools stay visually distinct.
+   * Walk segments + static GPS markers per team. Session/gap splitting prevents Philly↔NYC
+   * flight paths; markers cover sessions that only logged one coordinate.
    */
-  const trailPaths = useMemo(() => {
-    const byTeam = new Map();
-    trailScopedPoints.forEach((p) => {
-      const teamKey = [p.school, p.instructor, p.period, p.group].join('|');
-      if (!byTeam.has(teamKey)) {
-        byTeam.set(teamKey, {
-          teamKey,
-          colorKey: workspaceKind === 'class' ? p.group : p.school,
-          label: workspaceKind === 'class' ? p.group : p.school,
-          points: [],
-        });
-      }
-      byTeam.get(teamKey).points.push(p);
+  const { trailPaths, trailMarkers } = useMemo(() => {
+    const { segments, markers, colorKeyOrder } = buildTeamTrailSegments(trailPointsForMap, {
+      trailScope,
     });
-
-    const colorKeyOrder = [...new Set([...byTeam.values()].map((t) => t.colorKey))].sort();
-
-    return [...byTeam.values()]
-      .map((team) => ({
-        ...team,
-        color: colorForKey(team.colorKey, colorKeyOrder),
-        path: [...team.points]
-          .sort((a, b) => a.timestamp - b.timestamp)
-          .map((p) => ({ lat: p.lat, lng: p.lng })),
-      }))
-      .filter((team) => team.path.length >= 2);
-  }, [trailScopedPoints, workspaceKind]);
+    return {
+      trailPaths: segments.map((segment) => ({
+        ...segment,
+        color: colorForKey(segment.colorKey, colorKeyOrder),
+      })),
+      trailMarkers: markers.map((marker) => ({
+        ...marker,
+        color: colorForKey(marker.colorKey, colorKeyOrder),
+      })),
+    };
+  }, [trailPointsForMap, trailScope]);
 
   const trailLegendItems = useMemo(() => {
+    // One legend row per color bucket (period / class / team), not per individual group path.
     const seen = new Map();
-    trailPaths.forEach((t) => {
-      if (!seen.has(t.colorKey)) seen.set(t.colorKey, t.color);
+    [...trailPaths, ...trailMarkers].forEach((t) => {
+      if (!seen.has(t.colorKey)) seen.set(t.colorKey, { label: t.label, color: t.color });
     });
-    return [...seen.entries()].map(([label, color]) => ({ label, color }));
-  }, [trailPaths]);
+    return [...seen.values()];
+  }, [trailPaths, trailMarkers]);
 
   // Filter imported locations based on selected time range
   const filteredLocations = useMemo(() => {
@@ -414,13 +451,13 @@ const HeatMapDashboard = ({
 
   const usingOpenAQHeatmap = Boolean(openaqHeatmap?.points?.length);
 
-  // Heatmap points are always real OpenAQ readings. Student measurements are rendered only as trails.
+  // Heatmap points are OpenAQ (preferred) or WAQI fallback. Student measurements stay as trails.
   const locations = useMemo(() => {
     return (openaqHeatmap?.points || []).map((point, index) => {
       const value = Number(point.value);
       const row = {
         id: `openaq-${index}`,
-        name: point.location_name || `OpenAQ Site ${index + 1}`,
+        name: point.location_name || `${openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} Site ${index + 1}`,
         lat: Number(point.latitude),
         lng: Number(point.longitude),
         pm25: 0,
@@ -456,6 +493,10 @@ const HeatMapDashboard = ({
 
   const stats = useMemo(() => {
     const metric = selectedMetric;
+    const softEq = (filterVal, rowVal) => {
+      if (!filterVal || !rowVal) return true;
+      return String(filterVal) === String(rowVal);
+    };
 
     const cityAvg = showHeatmap && locations.length
       ? Math.round(
@@ -466,18 +507,25 @@ const HeatMapDashboard = ({
     // School/group cards should always come from your class CSV/workspace records, never OpenAQ city feed.
     const sourceForSchoolAndGroup = filteredImported;
 
-    // School Average (based on current filters)
-    const schoolData = sourceForSchoolAndGroup.filter(item => item.school === filters.school);
-    const schoolAvg = schoolData.length > 0
-      ? Math.round(schoolData.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / schoolData.length)
+    // School / team cards: skip hard school-name match (CSV codes vs directory names).
+    // Fall back to the full imported pool when profile filters match nothing.
+    const schoolData = sourceForSchoolAndGroup.filter((item) => softEq(filters.school, item.school));
+    const schoolPool = schoolData.length ? schoolData : sourceForSchoolAndGroup;
+    const schoolAvg = schoolPool.length > 0
+      ? Math.round(schoolPool.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / schoolPool.length)
       : null;
 
-    // Group Average (based on current filters)
-    const groupData = sourceForSchoolAndGroup.filter(
-      item => item.group === filters.group && item.school === filters.school
-    );
-    const groupAvg = groupData.length > 0
-      ? Math.round(groupData.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / groupData.length)
+    // Team Average — when Group isn't set (common for teachers), average all teams in the
+    // current instructor / period focus instead of showing a blank dash.
+    const groupData = sourceForSchoolAndGroup.filter((item) => {
+      if (!softEq(filters.instructor, item.instructor)) return false;
+      if (!softEq(filters.period, item.period)) return false;
+      if (filters.group && !softEq(filters.group, item.group)) return false;
+      return true;
+    });
+    const groupPool = groupData.length ? groupData : sourceForSchoolAndGroup;
+    const groupAvg = groupPool.length > 0
+      ? Math.round(groupPool.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / groupPool.length)
       : null;
 
     return { city: cityAvg, school: schoolAvg, group: groupAvg };
@@ -501,7 +549,10 @@ const HeatMapDashboard = ({
     if (showHeatmap) {
       return { lat: selectedCity.lat, lng: selectedCity.lng };
     }
-    const trailPoints = trailPaths.flatMap((trail) => trail.path);
+    const trailPoints = [
+      ...trailPaths.flatMap((trail) => trail.path),
+      ...trailMarkers.map((marker) => ({ lat: marker.lat, lng: marker.lng })),
+    ];
     if (trailPoints.length) {
       const lat = trailPoints.reduce((sum, point) => sum + Number(point.lat), 0) / trailPoints.length;
       const lng = trailPoints.reduce((sum, point) => sum + Number(point.lng), 0) / trailPoints.length;
@@ -509,7 +560,7 @@ const HeatMapDashboard = ({
     }
     if (activeSchoolPin) return { lat: activeSchoolPin.lat, lng: activeSchoolPin.lng };
     return { lat: selectedCity.lat, lng: selectedCity.lng };
-  }, [showHeatmap, selectedCity, trailPaths, activeSchoolPin]);
+  }, [showHeatmap, selectedCity, trailPaths, trailMarkers, activeSchoolPin]);
 
   const heatmapData = useMemo(() => ({
     type: 'FeatureCollection',
@@ -534,6 +585,16 @@ const HeatMapDashboard = ({
       },
     })),
   }), [trailPaths]);
+
+  // Only static single-fix sessions use dots; day trails are lines (vertices stay on the polyline).
+  const trailMarkerData = useMemo(() => ({
+    type: 'FeatureCollection',
+    features: trailMarkers.map((marker) => ({
+      type: 'Feature',
+      properties: { color: marker.color, label: marker.label },
+      geometry: { type: 'Point', coordinates: [marker.lng, marker.lat] },
+    })),
+  }), [trailMarkers]);
 
   const heatmapLayer = useMemo(() => {
     const gradient = displayMode === 'accessible' ? accessibleGradient : heatmapGradient;
@@ -569,20 +630,67 @@ const HeatMapDashboard = ({
     type: 'line',
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': 3,
-      'line-opacity': 0.88,
-      'line-dasharray': [2, 2],
+      'line-width': 4,
+      'line-opacity': 0.95,
+    },
+    layout: {
+      'line-cap': 'round',
+      'line-join': 'round',
+    },
+  }), []);
+
+  const trailMarkerLayer = useMemo(() => ({
+    id: 'measurement-trail-points',
+    type: 'circle',
+    paint: {
+      'circle-color': ['get', 'color'],
+      'circle-radius': 5,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#ffffff',
+      'circle-opacity': 0.95,
     },
   }), []);
 
   useEffect(() => {
     if (!isLoaded || !mapInstanceRef.current) return;
-    mapInstanceRef.current.flyTo({
+    const map = mapInstanceRef.current;
+    const coords = [
+      ...trailPaths.flatMap((trail) => trail.path.map((point) => [point.lng, point.lat])),
+      ...trailMarkers.map((marker) => [marker.lng, marker.lat]),
+    ];
+    if (!showHeatmap && coords.length >= 2) {
+      const lngs = coords.map((c) => c[0]);
+      const lats = coords.map((c) => c[1]);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      // Small campus padding — the old 0.01° floor zoomed out to ~neighborhood scale.
+      const padLng = Math.max((maxLng - minLng) * 0.2, 0.0015);
+      const padLat = Math.max((maxLat - minLat) * 0.2, 0.0015);
+      if (typeof map.fitBounds === 'function') {
+        map.fitBounds(
+          [
+            [minLng - padLng, minLat - padLat],
+            [maxLng + padLng, maxLat + padLat],
+          ],
+          { padding: 48, duration: 700, maxZoom: 17 }
+        );
+      } else {
+        map.flyTo?.({ center: [mapCenter.lng, mapCenter.lat], zoom: DEFAULT_MAP_ZOOM, duration: 700 });
+      }
+      return;
+    }
+    if (!showHeatmap && coords.length === 1) {
+      map.flyTo?.({ center: coords[0], zoom: SCHOOL_FOCUS_ZOOM, duration: 700 });
+      return;
+    }
+    map.flyTo?.({
       center: [mapCenter.lng, mapCenter.lat],
-      zoom: 12,
+      zoom: showHeatmap ? 12 : (activeSchoolPin ? SCHOOL_FOCUS_ZOOM : DEFAULT_MAP_ZOOM),
       duration: 700,
     });
-  }, [isLoaded, mapCenter.lat, mapCenter.lng]);
+  }, [isLoaded, showHeatmap, mapCenter.lat, mapCenter.lng, trailPaths, trailMarkers, activeSchoolPin]);
 
   const focusSchool = useCallback(() => {
     if (!activeSchoolPin) return;
@@ -637,44 +745,116 @@ const HeatMapDashboard = ({
     return `${school}-${instructor}-${period}-${group}-${timestamp.toString(36).slice(-4).toUpperCase()}-${random}`;
   }, [filters]);
 
-  // Capture screenshot with overlays
+  /** Resolve the MapLibre map from react-map-gl's MapRef. */
+  const getMapLibreMap = useCallback(() => {
+    const ref = mapInstanceRef.current;
+    if (!ref) return null;
+    if (typeof ref.getMap === 'function') return ref.getMap();
+    if (typeof ref.getCanvas === 'function') return ref;
+    return null;
+  }, []);
+
+  /**
+   * Save map PNG. html2canvas cannot read WebGL map tiles (blank white map) — snapshot the
+   * MapLibre canvas after idle, swap it into the clone as an <img>, and strip backdrop-blur
+   * so overlay card text stays sharp.
+   */
   const handleShareScreenshot = useCallback(async () => {
     if (!screenshotRef.current || isCapturing) return;
-    
+
     setIsCapturing(true);
-    
+
     try {
-      // Wait a bit for any animations to settle
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Capture the screenshot
+      const map = getMapLibreMap();
+      let mapDataUrl = '';
+      if (map?.getCanvas) {
+        await new Promise((resolve) => {
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          if (typeof map.once === 'function') {
+            map.once('idle', done);
+            if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+            else map.setBearing?.(map.getBearing?.() ?? 0);
+          } else {
+            done();
+          }
+          // Safety: never hang if idle never fires.
+          setTimeout(done, 1200);
+        });
+        try {
+          mapDataUrl = map.getCanvas().toDataURL('image/png');
+        } catch (err) {
+          console.warn('Map canvas export failed; overlay-only capture will be blank underneath.', err);
+        }
+      }
+
       const canvas = await html2canvas(screenshotRef.current, {
-        backgroundColor: '#f9fafb',
-        scale: 2, // Higher quality
+        backgroundColor: '#f8fafc',
+        scale: 2,
         logging: false,
         useCORS: true,
-        allowTaint: true,
+        onclone: (_doc, element) => {
+          element.querySelectorAll('[data-export-hide]').forEach((node) => {
+            node.style.display = 'none';
+          });
+          // Replace MapLibre WebGL canvases with the raster snapshot (html2canvas can't sample them).
+          if (mapDataUrl) {
+            const mapCanvases = element.querySelectorAll(
+              'canvas.maplibregl-canvas, .maplibregl-canvas, .maplibregl-map canvas, canvas'
+            );
+            const seen = new Set();
+            mapCanvases.forEach((node) => {
+              if (seen.has(node) || !(node instanceof HTMLCanvasElement)) return;
+              seen.add(node);
+              const parent = node.parentElement;
+              if (!parent) return;
+              const img = _doc.createElement('img');
+              img.src = mapDataUrl;
+              img.alt = '';
+              const width = node.offsetWidth || node.width || parent.clientWidth;
+              const height = node.offsetHeight || node.height || parent.clientHeight;
+              img.width = width;
+              img.height = height;
+              img.style.cssText = [
+                'display:block',
+                `width:${width}px`,
+                `height:${height}px`,
+                'max-width:none',
+                'object-fit:cover',
+              ].join(';');
+              parent.replaceChild(img, node);
+            });
+          }
+          // backdrop-blur + translucent panels rasterize as muddy/pixelated text.
+          element.querySelectorAll('*').forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            node.style.backdropFilter = 'none';
+            node.style.webkitBackdropFilter = 'none';
+            const className = typeof node.className === 'string' ? node.className : '';
+            if (className.includes('backdrop-blur') || /bg-white\/\d+/.test(className)) {
+              node.style.setProperty('background-color', '#ffffff', 'important');
+            }
+          });
+        },
       });
-      
-      // Create a new canvas for adding overlays
+
       const finalCanvas = document.createElement('canvas');
       finalCanvas.width = canvas.width;
-      finalCanvas.height = canvas.height + 90; // Extra space for overlay
+      finalCanvas.height = canvas.height + 90;
       const ctx = finalCanvas.getContext('2d');
-      
-      // Draw the original screenshot
+
       ctx.drawImage(canvas, 0, 0);
-      
-      // Add overlay section at the bottom
+
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, canvas.height, finalCanvas.width, 90);
-      
-      // Add subtle shadow/border
       ctx.strokeStyle = '#e5e7eb';
       ctx.lineWidth = 2;
       ctx.strokeRect(0, canvas.height, finalCanvas.width, 90);
-      
-      // Add timestamp
+
       const now = new Date();
       const timestamp = now.toLocaleString('en-US', {
         year: 'numeric',
@@ -683,82 +863,78 @@ const HeatMapDashboard = ({
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-        hour12: true
+        hour12: true,
       });
-      
-      // Add hierarchy info
+
       const schoolInfo = filters.school || 'Public';
       const classInfo = filters.instructor || 'Guest';
       const periodInfo = filters.period || 'N/A';
       const groupInfo = filters.group || 'Public';
-      
-      // Generate code
       const code = generateCode();
-      
-      // Set text styles for labels
+
       ctx.fillStyle = '#6b7280';
       ctx.font = '16px Arial, sans-serif';
       const labelY = canvas.height + 28;
       const valueY = canvas.height + 52;
       const codeY = canvas.height + 76;
-      
-      // Draw labels and values
+
       ctx.fillText('Timestamp:', 30, labelY);
       ctx.fillStyle = '#1f2937';
       ctx.font = 'bold 18px Arial, sans-serif';
       ctx.fillText(timestamp, 140, labelY);
-      
-      // Draw hierarchy info
+
       ctx.fillStyle = '#6b7280';
       ctx.font = '16px Arial, sans-serif';
       ctx.fillText('Team:', 30, valueY);
       ctx.fillStyle = '#1f2937';
       ctx.font = 'bold 18px Arial, sans-serif';
       ctx.fillText(`${schoolInfo} - ${classInfo} - ${periodInfo} - ${groupInfo}`, 100, valueY);
-      
-      // Draw code (right aligned)
+
       ctx.fillStyle = '#6b7280';
       ctx.font = '16px Arial, sans-serif';
       const codeLabel = 'Code:';
       const codeLabelWidth = ctx.measureText(codeLabel).width;
       ctx.fillText(codeLabel, finalCanvas.width - 200, codeY);
-      
+
       ctx.fillStyle = '#3b82f6';
       ctx.font = 'bold 18px Arial, sans-serif';
       ctx.fillText(code, finalCanvas.width - 200 + codeLabelWidth + 10, codeY);
-      
-      // Convert to blob and download
-      finalCanvas.toBlob((blob) => {
-        if (blob) {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `air-quality-heatmap-${now.toISOString().split('T')[0]}-${code}.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-        }
-        setIsCapturing(false);
-      }, 'image/png');
-      
+
+      await new Promise((resolve) => {
+        finalCanvas.toBlob((blob) => {
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `air-quality-heatmap-${now.toISOString().split('T')[0]}-${code}.png`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          }
+          resolve();
+        }, 'image/png');
+      });
     } catch (error) {
       console.error('Error capturing screenshot:', error);
       alert('Failed to capture screenshot. Please try again.');
+    } finally {
       setIsCapturing(false);
     }
-  }, [filters, generateCode, isCapturing]);
+  }, [filters, generateCode, getMapLibreMap, isCapturing]);
 
   return (
     <div className="h-[calc(100vh-6.5rem)] min-h-[620px]">
       {/* Screenshot container — everything the Share button captures */}
       <div ref={screenshotRef} className="relative h-full overflow-hidden rounded-2xl bg-slate-100 shadow-lg">
         {/* Floating controls stay visible without consuming map width. */}
-        <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-white/70 bg-white/95 p-2 shadow-lg backdrop-blur sm:left-4 sm:right-auto sm:max-w-[calc(100%-2rem)]">
+        <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-white/70 bg-white p-2 shadow-lg sm:left-4 sm:right-auto sm:max-w-[calc(100%-2rem)]">
           <div className="hidden min-w-0 sm:block">
             <p className="truncate text-sm font-bold text-gray-900">Air Quality Map</p>
             <p className="truncate text-[10px] text-gray-500">
-              {showHeatmap ? `${selectedCity.city} · OpenAQ reference` : `Student trails · ${dateRangeLabel}`}
+              {showHeatmap
+                ? `${selectedCity.city} · ${openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} reference`
+                : `Team trails · ${trailScope} · ${dateRangeLabel}`}
             </p>
           </div>
           <div className="hidden h-7 w-px bg-gray-200 sm:block" />
@@ -775,6 +951,34 @@ const HeatMapDashboard = ({
                 }`}
               >
                 {metric.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="hidden h-5 w-px bg-gray-200 sm:block" />
+
+          <div
+            className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5"
+            role="group"
+            aria-label="Trail compare scope"
+          >
+            {[
+              { id: 'team', label: 'Team' },
+              { id: 'class', label: 'Class' },
+              { id: 'school', label: 'School' },
+            ].map((scope) => (
+              <button
+                key={scope.id}
+                type="button"
+                aria-pressed={trailScope === scope.id}
+                onClick={() => setTrailScope(scope.id)}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  trailScope === scope.id
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {scope.label}
               </button>
             ))}
           </div>
@@ -835,6 +1039,8 @@ const HeatMapDashboard = ({
             </>
           )}
           <button
+            type="button"
+            data-export-hide="true"
             onClick={handleShareScreenshot}
             disabled={isCapturing}
             className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
@@ -849,8 +1055,9 @@ const HeatMapDashboard = ({
           {/* Map */}
           <div className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white">
             {showHeatmap && usingOpenAQHeatmap && (
-              <p className="absolute left-4 top-20 z-20 max-w-sm rounded-lg bg-white/90 px-2.5 py-1.5 text-[10px] font-medium text-emerald-700 shadow backdrop-blur">
-                Visualization source: OpenAQ sensors near {selectedCity.city}.
+              <p className="absolute left-4 top-20 z-20 max-w-sm rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-emerald-700 shadow">
+                Visualization source:{' '}
+                {openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} sensors near {selectedCity.city}.
               </p>
             )}
 
@@ -859,10 +1066,11 @@ const HeatMapDashboard = ({
             >
               <MapView
                 ref={mapInstanceRef}
+                preserveDrawingBuffer
                 initialViewState={{
                   longitude: mapCenter.lng,
                   latitude: mapCenter.lat,
-                  zoom: 12,
+                  zoom: activeSchoolPin ? SCHOOL_FOCUS_ZOOM : DEFAULT_MAP_ZOOM,
                 }}
                 mapStyle={MAP_STYLE_URL}
                 style={{ width: '100%', height: '100%' }}
@@ -889,6 +1097,12 @@ const HeatMapDashboard = ({
                 {trailData.features.length > 0 && (
                   <Source id="measurement-trail-data" type="geojson" data={trailData}>
                     <Layer {...trailLayer} />
+                  </Source>
+                )}
+
+                {trailMarkerData.features.length > 0 && (
+                  <Source id="measurement-trail-points" type="geojson" data={trailMarkerData}>
+                    <Layer {...trailMarkerLayer} />
                   </Source>
                 )}
 
@@ -969,7 +1183,7 @@ const HeatMapDashboard = ({
                   type="button"
                   role="status"
                   onClick={() => setGeoError('')}
-                  className="absolute right-3 top-14 z-20 max-w-xs rounded-lg border border-amber-200 bg-white/95 px-3 py-2 text-left text-xs text-amber-800 shadow-lg backdrop-blur"
+                  className="absolute right-3 top-14 z-20 max-w-xs rounded-lg border border-amber-200 bg-white px-3 py-2 text-left text-xs text-amber-800 shadow-lg"
                   title="Dismiss"
                 >
                   {geoError} Click to dismiss.
@@ -990,8 +1204,8 @@ const HeatMapDashboard = ({
 
               {showHeatmap && isLoaded && openaqStatus !== 'loading' && heatmapData.features.length === 0 && (
                 <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2">
-                  <div className="rounded-xl border border-amber-200 bg-white/95 px-6 py-4 shadow-lg backdrop-blur">
-                    <p className="text-center text-sm font-bold text-gray-800">No OpenAQ reference data</p>
+                  <div className="rounded-xl border border-amber-200 bg-white px-6 py-4 shadow-lg">
+                    <p className="text-center text-sm font-bold text-gray-800">No reference sensor data</p>
                     <p className="mt-1 text-center text-xs text-gray-500">
                       {openaqStatus === 'error'
                         ? 'The reference service could not be reached. Student trails are still available.'
@@ -1003,7 +1217,7 @@ const HeatMapDashboard = ({
 
               {/* Map Legend - Continuous Gradient */}
               {showHeatmap && heatmapData.features.length > 0 && (
-                <div className="absolute bottom-3 left-3 z-10 min-w-[220px] rounded-lg border border-gray-200 bg-white/95 p-2.5 shadow-lg backdrop-blur sm:bottom-4 sm:left-4">
+                <div className="absolute bottom-3 left-3 z-10 min-w-[220px] rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg sm:bottom-4 sm:left-4">
                   <p className="text-xs font-semibold text-gray-700 mb-2">Air Quality Gradient</p>
                   <div className="w-56 h-4 rounded overflow-hidden mb-2" style={{
                     background: `linear-gradient(to right, ${(displayMode === 'accessible' ? accessibleGradient : heatmapGradient).slice(1).join(', ')})`
@@ -1017,24 +1231,32 @@ const HeatMapDashboard = ({
                 </div>
               )}
 
-              {/* Trail legend — team colors (class scope) or school colors (school/public scope) */}
+              {/* Trail legend — one color per team within the selected Team/Class/School scope */}
               {trailLegendItems.length > 0 && (
-                <div className={`absolute left-3 z-10 max-w-[220px] rounded-lg border border-gray-200 bg-white/95 p-2.5 shadow-lg backdrop-blur ${
+                <div className={`absolute left-3 z-10 max-w-[220px] rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg ${
                   showHeatmap && heatmapData.features.length > 0
                     ? 'bottom-28 sm:bottom-4 sm:left-[270px]'
                     : 'bottom-3 sm:bottom-4 sm:left-4'
                 }`}>
                   <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {workspaceKind === 'class' ? 'Team trails' : 'School trails'}
+                    {trailScope === 'team'
+                      ? 'Team trail'
+                      : trailScope === 'class'
+                        ? 'Class trails · by period'
+                        : 'School trails · by class'}
                   </p>
                   <div className="space-y-1 max-h-28 overflow-y-auto">
                     {trailLegendItems.map((item) => (
                       <div key={item.label} className="flex items-center gap-2 text-[11px] text-gray-600">
-                        <span className="w-3 h-0.5 rounded" style={{ backgroundColor: item.color }} />
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
                         <span className="truncate">{item.label}</span>
                       </div>
                     ))}
                   </div>
+                  <p className="mt-2 text-[10px] leading-snug text-gray-500">
+                    Lines connect each team&apos;s geotagged spots in time order for the same day.
+                    {trailMarkers.length > 0 ? ' Dots are single-fix days.' : ''}
+                  </p>
                 </div>
               )}
             </div>
@@ -1044,7 +1266,7 @@ const HeatMapDashboard = ({
           <div className="absolute right-3 top-20 z-20 hidden w-44 flex-col gap-1.5 lg:flex">
             {showHeatmap && (
               <div
-                className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
                 style={{ borderColor: theme.primary }}
               >
                 <div className="flex justify-between items-start">
@@ -1068,7 +1290,7 @@ const HeatMapDashboard = ({
               </div>
             )}
 
-            <div className="min-w-[145px] rounded-lg border border-blue-100 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+            <div className="min-w-[145px] rounded-lg border border-blue-100 bg-white px-3 py-2 shadow-lg">
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">School Avg</p>
               <p className="text-[10px] text-blue-500 font-bold uppercase truncate">{filters.school || '—'}</p>
               <div className="flex items-baseline gap-1 mt-1">
@@ -1077,9 +1299,11 @@ const HeatMapDashboard = ({
               </div>
             </div>
 
-            <div className="min-w-[145px] rounded-lg border border-indigo-100 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+            <div className="min-w-[145px] rounded-lg border border-indigo-100 bg-white px-3 py-2 shadow-lg">
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Team Avg</p>
-              <p className="text-[10px] text-indigo-500 font-bold uppercase truncate">Team {filters.group || '—'}</p>
+              <p className="text-[10px] text-indigo-500 font-bold uppercase truncate">
+                {filters.group ? `Team ${filters.group}` : 'All teams'}
+              </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-lg font-bold text-indigo-600">{stats.group ?? '—'}</span>
                 {stats.group != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
@@ -1089,7 +1313,7 @@ const HeatMapDashboard = ({
             {bestLocation && worstLocation && (
               <>
                 <div
-                  className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                  className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
                   style={{
                     background: `linear-gradient(135deg, ${getColorForValue(bestLocation[selectedMetric])}30 0%, white 100%)`,
                     borderColor: getColorForValue(bestLocation[selectedMetric]),
@@ -1104,7 +1328,7 @@ const HeatMapDashboard = ({
                 </div>
 
                 <div
-                  className="min-w-[145px] rounded-lg border bg-white/95 px-3 py-2 shadow-lg backdrop-blur"
+                  className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
                   style={{
                     background: `linear-gradient(135deg, ${getColorForValue(worstLocation[selectedMetric])}30 0%, white 100%)`,
                     borderColor: getColorForValue(worstLocation[selectedMetric]),
@@ -1126,7 +1350,7 @@ const HeatMapDashboard = ({
               ['School', stats.school, '#2563EB'],
               ['Team', stats.group, '#4F46E5'],
             ].map(([label, value, color]) => (
-              <div key={label} className="rounded-lg border bg-white/95 px-2 py-1 shadow backdrop-blur">
+              <div key={label} className="rounded-lg border bg-white px-2 py-1 shadow">
                 <span className="mr-1 text-[9px] font-bold uppercase text-gray-500">{label}</span>
                 <span className="text-xs font-bold" style={{ color }}>{value ?? '—'}</span>
               </div>

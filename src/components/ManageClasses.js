@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { GraduationCap, LockKeyhole, Trash2, MoveRight, X, Copy, Mail } from 'lucide-react';
+import { GraduationCap, LockKeyhole, Trash2, MoveRight, X, Copy, Mail, Upload } from 'lucide-react';
 import {
   buildInviteLink,
   createInvitations,
@@ -13,6 +13,21 @@ import {
   updateStudentPlacement,
 } from '../api/auth';
 import ConfirmDialog from './ConfirmDialog';
+import { extractInviteEmails, parseInviteSpreadsheet } from '../utils/inviteSpreadsheet';
+
+/** Prefer a full email; bare local-parts / codes get a clear no-domain label. */
+function formatMemberContact(m) {
+  const email = String(m?.email || '').trim();
+  if (email.includes('@')) return email;
+  const code = String(m?.student_code || email || m?.username || '').trim();
+  if (!code) return '—';
+  return code.includes('@') ? code : `${code} (no domain)`;
+}
+
+function needsGroupAssign(m) {
+  const g = String(m?.group_code || '').trim();
+  return !g || g === 'G?' || g === '?';
+}
 
 export default function ManageClasses({
   workspaceId,
@@ -26,6 +41,7 @@ export default function ManageClasses({
   const [invitations, setInvitations] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState('');
+  const [invitePlacements, setInvitePlacements] = useState({}); // email -> { period, groupCode, fullName }
   const [inviteRole, setInviteRole] = useState('student');
   const [invitePeriod, setInvitePeriod] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
@@ -186,12 +202,13 @@ export default function ManageClasses({
       updateStudentPlacement(workspaceId, m.id, { period, groupCode: g }).catch(() => {});
     };
     applyGroup(group);
-    showToast(`Moved ${m.full_name || m.username} to ${period} · ${group}`, () => applyGroup(fromGroup));
+    showToast(`Moved ${m.full_name || formatMemberContact(m)} to ${period} · ${group}`, () => applyGroup(fromGroup));
   };
 
   /** Open the invite modal, optionally prefilled for a specific period (from the Groups section). */
   const openInviteModal = ({ role = 'student', period = '' } = {}) => {
     setInviteEmails('');
+    setInvitePlacements({});
     setInviteRole(role);
     setInvitePeriod(period);
     setInviteResult(null);
@@ -213,18 +230,60 @@ export default function ManageClasses({
     }
   };
 
+  const handleInviteSpreadsheet = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const { rows } = parseInviteSpreadsheet(String(reader.result || ''));
+      if (!rows.length) {
+        setError('No email addresses found. Use a CSV with a header row (name, email, period, group) then one student per line.');
+        return;
+      }
+      const existing = extractInviteEmails(inviteEmails);
+      const seen = new Set(existing);
+      const mergedEmails = [...existing];
+      const placements = { ...invitePlacements };
+      for (const row of rows) {
+        if (!seen.has(row.email)) {
+          seen.add(row.email);
+          mergedEmails.push(row.email);
+        }
+        if (row.period || row.groupCode || row.fullName) {
+          placements[row.email] = {
+            period: row.period,
+            groupCode: row.groupCode,
+            fullName: row.fullName,
+          };
+        }
+      }
+      setInviteEmails(mergedEmails.join('\n'));
+      setInvitePlacements(placements);
+      setError('');
+    };
+    reader.onerror = () => setError('Could not read that file.');
+    reader.readAsText(file);
+  };
+
   const handleInvite = async () => {
-    const emails = inviteEmails.split(/[\s,]+/).map((e) => e.trim()).filter((e) => e.includes('@'));
+    const emails = extractInviteEmails(inviteEmails);
     if (!emails.length) {
-      setError('Enter at least one email address.');
+      setError('Enter at least one email address (or upload a spreadsheet/CSV).');
       return;
     }
+    const invitees = emails.map((email) => {
+      const placed = invitePlacements[email] || {};
+      return {
+        email,
+        period: inviteRole === 'student' ? (placed.period || invitePeriod || '') : '',
+        groupCode: inviteRole === 'student' ? (placed.groupCode || '') : '',
+        fullName: placed.fullName || '',
+      };
+    });
     try {
       setInviteBusy(true);
       const result = await createInvitations(workspaceId, {
-        emails,
+        invitees,
         role: inviteRole,
-        period: inviteRole === 'student' ? invitePeriod : '',
       });
       setInviteResult(result);
       const created = result.invitations || [];
@@ -544,8 +603,9 @@ export default function ManageClasses({
             <thead>
               <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
                 <th className="py-2 pr-4">Email</th>
+                <th className="py-2 pr-4">Name</th>
                 <th className="py-2 pr-4">Role</th>
-                <th className="py-2 pr-4">Period</th>
+                <th className="py-2 pr-4">Placement</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Expires</th>
                 <th className="py-2 text-right">Actions</th>
@@ -563,8 +623,13 @@ export default function ManageClasses({
                 return (
                   <tr key={inv.id}>
                     <td className="py-3 pr-4 font-medium text-gray-900">{inv.email}</td>
+                    <td className="py-3 pr-4 text-gray-700">{inv.full_name || '—'}</td>
                     <td className="py-3 pr-4 capitalize">{inv.role}</td>
-                    <td className="py-3 pr-4">{inv.period || '—'}</td>
+                    <td className="py-3 pr-4 whitespace-nowrap">
+                      {inv.period || inv.group_code
+                        ? `${inv.period || 'P?'} · ${inv.group_code || 'G?'}`
+                        : '—'}
+                    </td>
                     <td className="py-3 pr-4">
                       <span className={`px-2 py-1 rounded-full text-xs font-semibold ${statusStyles[status] || statusStyles.pending}`}>
                         {status}
@@ -640,30 +705,42 @@ export default function ManageClasses({
             <thead>
               <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
                 <th className="py-2 pr-4">Name</th>
-                <th className="py-2 pr-4">Username</th>
+                <th className="py-2 pr-4">Email</th>
                 <th className="py-2 pr-4">Group</th>
                 <th className="py-2 pr-4">Joined</th>
                 <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {studentMembers.map((m) => (
+              {studentMembers.map((m) => {
+                const assignFirst = needsGroupAssign(m);
+                return (
                 <tr key={m.id}>
                   <td className="py-3 pr-4 font-medium text-gray-900">
-                    {m.full_name ? m.full_name : <span className="text-gray-400 italic">{m.username}</span>}
+                    {m.full_name ? m.full_name : <span className="text-gray-400 italic">{formatMemberContact(m)}</span>}
                   </td>
-                  <td className="py-3 pr-4 text-gray-600 font-mono text-xs">{m.username}</td>
-                  <td className="py-3 pr-4 whitespace-nowrap">{m.period} · {m.group_code}</td>
+                  <td className="py-3 pr-4 text-gray-600 font-mono text-xs" title={formatMemberContact(m)}>
+                    {formatMemberContact(m)}
+                  </td>
+                  <td className="py-3 pr-4 whitespace-nowrap">{m.period || 'P?'} · {m.group_code || 'G?'}</td>
                   <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{m.joined_at}</td>
                   <td className="py-3">
                     <div className="flex items-center gap-1 justify-end">
                       <button onClick={() => openStudentAction(m, 'password')} title="Reset password" className="px-2 py-1.5 rounded text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 inline-flex items-center gap-1"><LockKeyhole className="w-3.5 h-3.5" />PW</button>
-                      <button onClick={() => openStudentAction(m, 'move')} title="Move period/group" className="px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"><MoveRight className="w-3.5 h-3.5" />Move</button>
+                      <button
+                        onClick={() => openStudentAction(m, 'move')}
+                        title={assignFirst ? 'Assign period/group' : 'Move period/group'}
+                        className="px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                      >
+                        <MoveRight className="w-3.5 h-3.5" />
+                        {assignFirst ? 'Assign' : 'Move'}
+                      </button>
                       <button onClick={() => setRemoveTarget(m)} title="Remove account" className="px-2 py-1.5 rounded text-xs bg-red-50 text-red-700 hover:bg-red-100 inline-flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />Remove</button>
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {studentMembers.length === 0 && (
                 <tr><td colSpan={5} className="py-6 text-center text-gray-400">No students yet — invite them by email.</td></tr>
               )}
@@ -744,7 +821,7 @@ export default function ManageClasses({
                             className="px-2 py-1 rounded bg-gray-100 text-gray-700 text-xs cursor-grab active:cursor-grabbing select-none"
                             title="Drag to another group in the same period"
                           >
-                            {a.full_name || a.username}
+                            {a.full_name || formatMemberContact(a)}
                           </span>
                         ))}
                       </div>
@@ -764,10 +841,12 @@ export default function ManageClasses({
               <div>
                 <h4 className="font-bold text-gray-900">
                   {activeAction === 'password' && 'Reset Password'}
-                  {activeAction === 'move' && 'Move Student'}
+                  {activeAction === 'move' && (needsGroupAssign(activeStudent) ? 'Assign Student' : 'Move Student')}
                   {activeAction === 'delete' && 'Remove Student'}
                 </h4>
-                <p className="text-xs text-gray-500 mt-1">{activeStudent.full_name} • {activeStudent.email}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {activeStudent.full_name} • {formatMemberContact(activeStudent)}
+                </p>
               </div>
               <button
                 onClick={() => !busy && setActiveStudent(null)}
@@ -797,6 +876,11 @@ export default function ManageClasses({
               )}
               {activeAction === 'move' && (
                 <div className="space-y-3">
+                  {needsGroupAssign(activeStudent) && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                      This student has no group yet — pick a period and group to assign them.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <select
                       value={draftPeriod}
@@ -818,7 +902,7 @@ export default function ManageClasses({
                     onClick={handleMoveStudent}
                     className="px-3 py-1.5 rounded text-sm bg-blue-50 text-blue-700 hover:bg-blue-100"
                   >
-                    Move Student
+                    {needsGroupAssign(activeStudent) ? 'Assign Student' : 'Move Student'}
                   </button>
                 </div>
               )}
@@ -884,7 +968,11 @@ export default function ManageClasses({
                     </p>
                   )}
                   <button
-                    onClick={() => setInviteResult(null)}
+                    onClick={() => {
+                      setInviteResult(null);
+                      setInviteEmails('');
+                      setInvitePlacements({});
+                    }}
                     className="text-sm text-blue-600 hover:text-blue-700 font-semibold"
                   >
                     Invite more people
@@ -893,8 +981,8 @@ export default function ManageClasses({
               ) : (
                 <>
                   <p className="text-xs text-gray-500">
-                    Enter one or more email addresses (comma- or newline-separated). Each gets a personal
-                    join link — re-inviting an email replaces its previous link.
+                    Upload a CSV — the first header row (<span className="font-mono">name, email, period, group</span>)
+                    is skipped automatically. Names pre-fill on the student join page; period/group assign on accept.
                   </p>
                   <textarea
                     value={inviteEmails}
@@ -903,6 +991,27 @@ export default function ManageClasses({
                     placeholder="student@example.com, student2@example.com"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                   />
+                  {Object.keys(invitePlacements).length > 0 && (
+                    <p className="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                      Spreadsheet loaded for {Object.keys(invitePlacements).length} student
+                      {Object.keys(invitePlacements).length === 1 ? '' : 's'}
+                      {' '}(name / period / group pre-filled where provided).
+                    </p>
+                  )}
+                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 cursor-pointer w-fit">
+                    <Upload className="w-3.5 h-3.5" />
+                    Upload spreadsheet / CSV
+                    <input
+                      type="file"
+                      accept=".csv,.txt,text/csv,text/plain"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        handleInviteSpreadsheet(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Role</label>
@@ -917,7 +1026,7 @@ export default function ManageClasses({
                     </div>
                     {inviteRole === 'student' && (
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">Period (optional)</label>
+                        <label className="block text-xs text-gray-500 mb-1">Default period (optional)</label>
                         <select
                           value={invitePeriod}
                           onChange={(e) => setInvitePeriod(e.target.value)}
@@ -1017,7 +1126,7 @@ export default function ManageClasses({
         open={!!removeTarget}
         variant="danger"
         title="Remove this account?"
-        message={removeTarget ? `Remove ${removeTarget.username} (${removeTarget.period} · ${removeTarget.group_code}) from the roster?` : ''}
+        message={removeTarget ? `Remove ${removeTarget.full_name || formatMemberContact(removeTarget)} (${removeTarget.period || 'P?'} · ${removeTarget.group_code || 'G?'}) from the roster?` : ''}
         confirmLabel="Remove"
         onCancel={() => setRemoveTarget(null)}
         onConfirm={() => doRemoveStudent(removeTarget)}

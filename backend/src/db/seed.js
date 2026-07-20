@@ -36,26 +36,30 @@ const INSTRUCTOR_NAME = "Ms. Rivera";
 //   Ava Martinez  · P3 G1 · DEV001   (s1–s5)
 //   Liam Chen     · P3 G2 · STU003   (s6–s10)
 //   Noah Patel    · P3 G3 · STU004   (s11–s14)
+// Outdoor GPS anchors around Abraham Lincoln High School (Northeast Philly), NOT NYC —
+// older seed coords near Columbia University drew absurd Philly↔NYC "trails" on the map.
+const LINCOLN_CAMPUS = { lat: 40.0401, lng: -75.0312 };
+
 const SESSION_SPECS = [
   // === Ava Martinez · P3 G1 (DEV001) ===
-  { sessionId: 's1', sessionName: 'Rivera P3 G1 Courtyard Walk', location: 'Main Courtyard', latitude: 40.8124, longitude: -73.9612, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'school', ownerCode: 'DEV001', date: '2026-06-01', startClock: '13:12:00', durationSec: 240, base: { pm25: 14, co: 0.5, temp: 21, humidity: 58 }, event: { metric: 'pm25', atFrac: 0.5, widthFrac: 0.06, magnitude: 34 } },
+  { sessionId: 's1', sessionName: 'Rivera P3 G1 Courtyard Walk', location: 'Main Courtyard', latitude: LINCOLN_CAMPUS.lat, longitude: LINCOLN_CAMPUS.lng, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'school', ownerCode: 'DEV001', date: '2026-06-01', startClock: '13:12:00', durationSec: 240, base: { pm25: 14, co: 0.5, temp: 21, humidity: 58 }, event: { metric: 'pm25', atFrac: 0.5, widthFrac: 0.06, magnitude: 34 } },
   { sessionId: 's2', sessionName: 'Rivera P3 G1 Gym', location: 'Gymnasium', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'public', ownerCode: 'DEV001', date: '2026-06-02', startClock: '08:47:00', durationSec: 180, base: { pm25: 23, co: 0.8, temp: 24, humidity: 49 } },
   { sessionId: 's3', sessionName: 'Rivera P3 G1 Cafeteria', location: 'Cafeteria', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'school', ownerCode: 'DEV001', date: '2026-06-04', startClock: '14:05:00', durationSec: 300, base: { pm25: 31, co: 1.1, temp: 23, humidity: 61 } },
-  { sessionId: 's4', sessionName: 'Rivera P3 G1 Entrance', location: 'Front Entrance', latitude: 40.8131, longitude: -73.9627, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'school', ownerCode: 'DEV001', date: '2026-06-10', startClock: '09:30:00', durationSec: 150, base: { pm25: 9, co: 0.3, temp: 19, humidity: 66 } },
+  { sessionId: 's4', sessionName: 'Rivera P3 G1 Entrance', location: 'Front Entrance', latitude: 40.0405, longitude: -75.0320, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'school', ownerCode: 'DEV001', date: '2026-06-10', startClock: '09:30:00', durationSec: 150, base: { pm25: 9, co: 0.3, temp: 19, humidity: 66 } },
   { sessionId: 's5', sessionName: 'Rivera P3 G1 Library', location: 'Library', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G1', visibility: 'public', ownerCode: 'DEV001', date: '2026-06-04', startClock: '14:22:00', durationSec: 210, base: { pm25: 18, co: 0.6, temp: 22, humidity: 54 } },
 
   // === Liam Chen · P3 G2 (STU003) ===
   { sessionId: 's6', sessionName: 'Rivera P3 G2 Chem Lab', location: 'Chemistry Lab', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'school', ownerCode: 'STU003', date: '2026-06-05', startClock: '10:15:00', durationSec: 270, base: { pm25: 44, co: 1.5, temp: 26, humidity: 42 } },
   { sessionId: 's7', sessionName: 'Rivera P3 G2 Art Studio', location: 'Art Studio', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'school', ownerCode: 'STU003', date: '2026-06-11', startClock: '11:40:00', durationSec: 240, base: { pm25: 16, co: 0.5, temp: 22, humidity: 57 } },
   { sessionId: 's8', sessionName: 'Rivera P3 G2 Band Room', location: 'Band Room', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'school', ownerCode: 'STU003', date: '2026-06-05', startClock: '10:50:00', durationSec: 300, base: { pm25: 27, co: 0.9, temp: 24, humidity: 47 } },
-  { sessionId: 's9', sessionName: 'Rivera P3 G2 Pool', location: 'Pool Deck', indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'public', ownerCode: 'STU003', date: '2026-06-12', startClock: '13:05:00', durationSec: 600, base: { pm25: 12, co: 0.4, temp: 27, humidity: 70 } },
+  { sessionId: 's9', sessionName: 'Rivera P3 G2 Pool', location: 'Pool Deck', latitude: 40.0408, longitude: -75.0298, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'public', ownerCode: 'STU003', date: '2026-06-12', startClock: '13:05:00', durationSec: 600, base: { pm25: 12, co: 0.4, temp: 27, humidity: 70 } },
   { sessionId: 's10', sessionName: 'Rivera P3 G2 Aux Gym', location: 'Auxiliary Gym', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G2', visibility: 'school', ownerCode: 'STU003', date: '2026-06-16', startClock: '08:55:00', durationSec: 200, base: { pm25: 20, co: 0.7, temp: 23, humidity: 51 } },
 
   // === Noah Patel · P3 G3 (STU004) ===
-  { sessionId: 's11', sessionName: 'Rivera P3 G3 Field', location: 'Athletic Field', latitude: 40.8210, longitude: -73.9514, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-05', startClock: '15:20:00', durationSec: 180, base: { pm25: 8, co: 0.2, temp: 20, humidity: 63 } },
+  { sessionId: 's11', sessionName: 'Rivera P3 G3 Field', location: 'Athletic Field', latitude: 40.0412, longitude: -75.0305, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-05', startClock: '15:20:00', durationSec: 180, base: { pm25: 8, co: 0.2, temp: 20, humidity: 63 } },
   { sessionId: 's12', sessionName: 'Rivera P3 G3 Hallway', location: 'Main Hallway', indoorOutdoor: 'INDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'public', ownerCode: 'STU004', date: '2026-06-15', startClock: '12:30:00', durationSec: 360, base: { pm25: 35, co: 1.2, temp: 25, humidity: 45 }, event: { metric: 'pm25', atFrac: 0.4, widthFrac: 0.05, magnitude: 28 } },
-  { sessionId: 's13', sessionName: 'Rivera P3 G3 Lot', location: 'Parking Lot', latitude: 40.8228, longitude: -73.9521, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-17', startClock: '13:45:00', durationSec: 600, base: { pm25: 52, co: 1.6, temp: 28, humidity: 38 }, event: { metric: 'pm25', atFrac: 0.6, widthFrac: 0.04, magnitude: 48 } },
-  { sessionId: 's14', sessionName: 'Rivera P3 G3 Track', location: 'Running Track', indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-18', startClock: '14:10:00', durationSec: 160, base: { pm25: 11, co: 0.3, temp: 21, humidity: 60 } },
+  { sessionId: 's13', sessionName: 'Rivera P3 G3 Lot', location: 'Parking Lot', latitude: 40.0395, longitude: -75.0325, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-17', startClock: '13:45:00', durationSec: 600, base: { pm25: 52, co: 1.6, temp: 28, humidity: 38 }, event: { metric: 'pm25', atFrac: 0.6, widthFrac: 0.04, magnitude: 48 } },
+  { sessionId: 's14', sessionName: 'Rivera P3 G3 Track', location: 'Running Track', latitude: 40.0415, longitude: -75.0310, indoorOutdoor: 'OUTDOOR', school: 'LINCOLN', instructor: 'Ms. Rivera', period: 'P3', group: 'G3', visibility: 'school', ownerCode: 'STU004', date: '2026-06-18', startClock: '14:10:00', durationSec: 160, base: { pm25: 11, co: 0.3, temp: 21, humidity: 60 } },
 ];
 
 function makeRng(seed) {
@@ -264,8 +268,18 @@ async function run() {
       const cos         = readings.map((r) => r.co);
       const temps       = readings.map((r) => r.temp);
       const humidities  = readings.map((r) => r.humidity);
-      const lats        = readings.map(() => spec.latitude ?? null);
-      const lngs        = readings.map(() => spec.longitude ?? null);
+      // Outdoor walks get a short campus path (so minute-aggregated trails aren't a single point).
+      // Stay within ~150m of the session anchor — never city-scale jumps.
+      const lats = readings.map((_, idx) => {
+        if (spec.latitude == null) return null;
+        const t = readings.length > 1 ? idx / (readings.length - 1) : 0;
+        return spec.latitude + Math.sin(t * Math.PI * 2 + i) * 0.0009;
+      });
+      const lngs = readings.map((_, idx) => {
+        if (spec.longitude == null) return null;
+        const t = readings.length > 1 ? idx / (readings.length - 1) : 0;
+        return spec.longitude + Math.cos(t * Math.PI * 2 + i * 0.7) * 0.0011;
+      });
       const indoors     = readings.map(() => spec.indoorOutdoor);
       const wsIds       = readings.map(() => workspaceId);
       const sessIds     = readings.map(() => sessionId);

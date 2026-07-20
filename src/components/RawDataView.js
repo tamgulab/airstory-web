@@ -4,6 +4,7 @@ import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, import
 import {
   clearImportedMeasurements,
   getImportedMeasurements,
+  isLocalImportCache,
   parseImportedCsv,
   parseImportedCsvRaw,
   setImportedMeasurements,
@@ -11,6 +12,7 @@ import {
   uniqueHierarchyFromImportedRows,
 } from '../utils/importedData';
 import { workspaceMeasurementsToDisplayRows } from '../utils/measurementRows';
+import { compareHierarchyToken } from '../utils/classStructure';
 import DataCalendar from './DataCalendar';
 import ConfirmDialog from './ConfirmDialog';
 import {
@@ -31,6 +33,8 @@ const ALL_METRICS_ON = { pm25: true, co: true, temp: true, humidity: true };
 
 // A "class" is a (teacher · period) pair → this key never lets period stand alone.
 const ck = (instructor, period) => `${instructor}|${period}`;
+const normHierarchy = (value) => String(value ?? '').trim();
+const sameHierarchyToken = (a, b) => normHierarchy(a) === normHierarchy(b);
 
 // TODO(backend): the backend stores temperature in CELSIUS only. The °C/°F choice is a
 // client-side display preference — convert at render, never change stored data.
@@ -57,8 +61,11 @@ const RawDataView = ({
   theme,
   metricThemes,
   onImportedDataChanged,
+  importedDataVersion = 0,
   isReadOnly = false, // true for the aggregate Public / school workspaces (server already scopes rows)
+  userRole = 'student',
 }) => {
+  const isTeacher = userRole === 'teacher';
   const [rawData, setRawData] = useState(() => getImportedMeasurements());
   const [loadingBackend, setLoadingBackend] = useState(false);
   const [importError, setImportError] = useState('');
@@ -95,14 +102,22 @@ const RawDataView = ({
   // Scope predicate (used by the table AND the scope-aware Location options). In the aggregate
   // Public / school workspaces the server already returns exactly the rows the viewer may see, so
   // the Group/Class/School convenience filter is bypassed. Visibility is enforced server-side.
-  const rowInScope = (row) =>
-    isReadOnly
-      ? true
-      : scopeTab === 'school'
-        ? row.school === viewerIdentity.school
-        : scopeTab === 'class'
-          ? ck(row.instructor, row.period) === scopeClassKey
-          : ck(row.instructor, row.period) === scopeClassKey && row.group === scopeGroup;
+  // School tab shows the full workspace table — exact school-name match was hiding CSV school codes
+  // (e.g. LINCOLN vs "Abraham Lincoln High School") and looked like a data wipe.
+  // Group/Class must actually filter: an empty scopeGroup used to short-circuit as "match all"
+  // while the <select> still *displayed* the first option (looked filtered, wasn't).
+  const rowInScope = (row) => {
+    if (isReadOnly || scopeTab === 'school') return true;
+    const rowClassKey = ck(normHierarchy(row.instructor), normHierarchy(row.period));
+    const classMatch =
+      !scopeClassKey ||
+      rowClassKey === scopeClassKey ||
+      ck(row.instructor, row.period) === scopeClassKey;
+    if (scopeTab === 'class') return classMatch;
+    if (!classMatch) return false;
+    if (!normHierarchy(scopeGroup)) return false;
+    return sameHierarchyToken(row.group, scopeGroup);
+  };
 
   // Toolbar: draft values (bound to inputs) vs applied values (used by the table).
   // Search/date/location/metrics only take effect on [Apply]. Scope tabs are immediate.
@@ -116,8 +131,9 @@ const RawDataView = ({
   // Shared confirmation for any destructive action: { variant, title, message, confirmLabel, onConfirm } | null
   const [confirmState, setConfirmState] = useState(null);
   const [visibilityMenu, setVisibilityMenu] = useState(null); // rowId whose visibility menu is open
-  // Empty-by-default: no sessions shown until the student engages (picks a scope tab/selector or applies filters).
-  const [hasEngaged, setHasEngaged] = useState(false);
+  // Empty-by-default until engage — but if the cache already has rows (import / prior hydrate),
+  // show them immediately. Remounting used to reset this to false and look like a wipe.
+  const [hasEngaged, setHasEngaged] = useState(() => getImportedMeasurements().length > 0);
 
   // Display preferences — view-only, this session (in-memory). Data underneath is unchanged.
   // TODO(persist): a saved user preference would attach to the user profile (or localStorage);
@@ -152,9 +168,19 @@ const RawDataView = ({
   const itemsPerPage = 50;
   const importGenerationRef = useRef(0);
 
-  const loadFromBackend = useCallback(async () => {
+  const loadFromBackend = useCallback(async ({ force = false } = {}) => {
     if (!workspaceId) return;
     const genAtStart = importGenerationRef.current;
+    const cached = getImportedMeasurements();
+    // Keep whatever is already on screen (CSV import or prior hydrate). Only a forced refresh
+    // after a successful CSV persist may replace it — automatic remount reloads were wiping UI.
+    if (!force && (isLocalImportCache() || cached.length > 0)) {
+      if (cached.length) {
+        setRawData(cached);
+        setHasEngaged(true);
+      }
+      return;
+    }
     setLoadingBackend(true);
     try {
       const result = await getMeasurements(workspaceId, { limit: 10000 });
@@ -162,7 +188,8 @@ const RawDataView = ({
       const mapped = workspaceMeasurementsToDisplayRows(result.measurements || []);
       if (mapped.length) {
         setRawData(mapped);
-        setImportedMeasurements(mapped);
+        setHasEngaged(true);
+        setImportedMeasurements(mapped, { source: 'server' });
         onImportedDataChanged?.();
       }
     } catch {
@@ -178,6 +205,16 @@ const RawDataView = ({
     loadFromBackend();
   }, [loadFromBackend]);
 
+  // Stay in sync with App's measurement cache, but never replace a full table with an empty cache
+  // (that was the "data disappears after half a minute" bug).
+  useEffect(() => {
+    const cached = getImportedMeasurements();
+    if (cached.length) {
+      setRawData(cached);
+      setHasEngaged(true);
+    }
+  }, [importedDataVersion]);
+
   React.useEffect(() => {
     setSelectedSchool(filters.school || '');
     setSelectedInstructor(filters.instructor || '');
@@ -189,21 +226,13 @@ const RawDataView = ({
   // further narrowed by the DRAFT date selection (chips narrow each other live, before Apply).
   // Metrics are column toggles, not row filters, so they don't change available locations.
   const locations = useMemo(() => {
-    const inScope = (r) =>
-      isReadOnly
-        ? true
-        : scopeTab === 'school'
-          ? r.school === viewerIdentity.school
-          : scopeTab === 'class'
-            ? ck(r.instructor, r.period) === scopeClassKey
-            : ck(r.instructor, r.period) === scopeClassKey && r.group === scopeGroup;
     return [...new Set(
       rawData
-        .filter((r) => inScope(r))
+        .filter((r) => rowInScope(r))
         .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
         .map((d) => d.location)
     )];
-  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity]);
+  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity.school]);
 
   // If the drafted location is no longer available (scope or date draft changed), deselect it.
   useEffect(() => {
@@ -215,39 +244,98 @@ const RawDataView = ({
   // Dates that have data → drives the calendar's bold/selectable days (Section 3).
   const dataDates = new Set(rawData.map((d) => d.date));
 
-  // Class-periods (teacher · period) present in the school → drives the Class tab.
-  const schoolRows = rawData.filter((r) => r.school === viewerIdentity.school);
-  const classPeriods = [];
-  const seenClass = new Set();
-  schoolRows.forEach((r) => {
-    const key = ck(r.instructor, r.period);
-    if (r.instructor && r.period && !seenClass.has(key)) {
-      seenClass.add(key);
-      classPeriods.push({ key, label: `${r.instructor} · ${r.period}` });
-    }
-  });
-  classPeriods.sort((a, b) => a.label.localeCompare(b.label));
+  // Class-periods (teacher · period) in the workspace table → drives the Class tab.
+  // Do not require exact school-name match (CSV codes vs directory names).
+  const schoolRows = rawData;
+  const classPeriods = useMemo(() => {
+    const periods = [];
+    const seenClass = new Set();
+    rawData.forEach((r) => {
+      const key = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+      if (normHierarchy(r.instructor) && normHierarchy(r.period) && !seenClass.has(key)) {
+        seenClass.add(key);
+        periods.push({
+          key,
+          label: `${normHierarchy(r.instructor)} · ${normHierarchy(r.period)}`,
+        });
+      }
+    });
+    periods.sort((a, b) => a.label.localeCompare(b.label));
+    return periods;
+  }, [rawData]);
 
   // Groups within the currently selected class context → drives the Group tab.
-  const groupsForSelectedClass = [...new Set(
-    schoolRows.filter((r) => ck(r.instructor, r.period) === scopeClassKey).map((r) => r.group).filter(Boolean)
-  )].sort();
+  const groupsForSelectedClass = useMemo(
+    () =>
+      [...new Set(
+        rawData
+          .filter((r) => {
+            const key = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+            return !scopeClassKey || key === scopeClassKey || ck(r.instructor, r.period) === scopeClassKey;
+          })
+          .map((r) => normHierarchy(r.group))
+          .filter(Boolean)
+      )].sort(compareHierarchyToken),
+    [rawData, scopeClassKey]
+  );
 
   // The viewer's own group within a given class-period (empty if not a member).
   const viewerGroupForClass = (key) => {
-    const m = viewerIdentity.memberships.find((mm) => ck(mm.instructor, mm.period) === key);
-    return m ? m.group : '';
+    const m = viewerIdentity.memberships.find(
+      (mm) =>
+        ck(normHierarchy(mm.instructor), normHierarchy(mm.period)) === key ||
+        ck(mm.instructor, mm.period) === key
+    );
+    return m ? normHierarchy(m.group) : '';
   };
   const selectedClassLabel = classPeriods.find((c) => c.key === scopeClassKey)?.label || '';
+
+  // Keep Class/Group selects honest: if state is blank or stale, snap to a real option so the
+  // visible dropdown value matches what the table filter uses.
+  useEffect(() => {
+    if (isReadOnly || !classPeriods.length) return;
+    if (!scopeClassKey || !classPeriods.some((c) => c.key === scopeClassKey)) {
+      const own = ck(
+        normHierarchy(primaryMembership.instructor),
+        normHierarchy(primaryMembership.period)
+      );
+      const next = classPeriods.find((c) => c.key === own)?.key || classPeriods[0].key;
+      setScopeClassKey(next);
+    }
+  }, [isReadOnly, classPeriods, scopeClassKey, primaryMembership.instructor, primaryMembership.period]);
+
+  useEffect(() => {
+    if (isReadOnly || !groupsForSelectedClass.length) return;
+    if (!scopeGroup || !groupsForSelectedClass.some((g) => sameHierarchyToken(g, scopeGroup))) {
+      const ownMembership = viewerIdentity.memberships.find(
+        (mm) =>
+          ck(normHierarchy(mm.instructor), normHierarchy(mm.period)) === scopeClassKey ||
+          ck(mm.instructor, mm.period) === scopeClassKey
+      );
+      const own = ownMembership ? normHierarchy(ownMembership.group) : '';
+      const next =
+        (own && groupsForSelectedClass.find((g) => sameHierarchyToken(g, own))) ||
+        groupsForSelectedClass[0];
+      setScopeGroup(next);
+    }
+  }, [isReadOnly, groupsForSelectedClass, scopeGroup, scopeClassKey, viewerIdentity.memberships]);
 
   // Switching class context resets the Group default to follow it.
   const selectClassContext = (key) => {
     setScopeClassKey(key);
     const ownGroup = viewerGroupForClass(key);
     const groups = [...new Set(
-      schoolRows.filter((r) => ck(r.instructor, r.period) === key).map((r) => r.group).filter(Boolean)
-    )].sort();
-    setScopeGroup(ownGroup || groups[0] || '');
+      schoolRows
+        .filter((r) => {
+          const rowKey = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+          return rowKey === key || ck(r.instructor, r.period) === key;
+        })
+        .map((r) => normHierarchy(r.group))
+        .filter(Boolean)
+    )].sort(compareHierarchyToken);
+    setScopeGroup(
+      (ownGroup && groups.find((g) => sameHierarchyToken(g, ownGroup))) || groups[0] || ''
+    );
     setHasEngaged(true);
   };
   
@@ -462,9 +550,9 @@ const RawDataView = ({
         visibility: r.visibility || 'school',
       }));
       importGenerationRef.current += 1;
-      // Always show imported data in UI immediately.
+      // Always show imported data in UI immediately; mark as local so polls cannot wipe it.
       setRawData(imported);
-      setImportedMeasurements(imported);
+      setImportedMeasurements(imported, { source: 'local-import' });
       onImportedDataChanged?.();
       setImportError('');
       // Historical CSVs are often hidden by date/location chips; widen filters after import.
@@ -478,11 +566,24 @@ const RawDataView = ({
       const inferred = uniqueHierarchyFromImportedRows(imported);
       setFilters((prev) => ({
         ...prev,
-        school: inferred.school,
-        instructor: inferred.instructor,
-        period: inferred.period,
-        group: inferred.group,
+        school: inferred.school || prev.school,
+        instructor: inferred.instructor || prev.instructor,
+        period: inferred.period || prev.period,
+        group: inferred.group || prev.group,
       }));
+
+      // Raw Data hides rows until the user "engages" a scope. Importing should show data immediately,
+      // and point the scope selectors at the CSV hierarchy (otherwise Group/School filters hide it).
+      setHasEngaged(true);
+      if (inferred.instructor || inferred.period) {
+        setScopeClassKey(ck(inferred.instructor, inferred.period));
+      }
+      if (inferred.group) {
+        setScopeGroup(inferred.group);
+      }
+      // Prefer School scope after import so hierarchy mismatches cannot hide the new rows.
+      setScopeTab('school');
+      if (inferred.group) setScopeGroup(inferred.group);
 
       if (workspaceId && rawRows.length) {
         const payloadRows = rawRows.map((r) => ({
@@ -502,18 +603,21 @@ const RawDataView = ({
           co: Number(r.co) || 0,
           temp: Number(r.temp) || 0,
           humidity: Number(r.humidity) || 0,
+          visibility: 'school',
         }));
         try {
           for (let i = 0; i < payloadRows.length; i += CSV_UPLOAD_CHUNK_SIZE) {
             const chunk = payloadRows.slice(i, i + CSV_UPLOAD_CHUNK_SIZE);
             await importCsvMeasurements(workspaceId, chunk);
           }
-          await loadFromBackend();
+          await loadFromBackend({ force: true });
+          // Keep the import visible even if the workspace school name differs from CSV school codes.
+          setHasEngaged(true);
         } catch (persistError) {
           setImportError(
             persistError?.message
-              ? `Imported locally, but cloud save failed: ${persistError.message}`
-              : 'Imported locally, but cloud save failed.'
+              ? `Imported in the browser, but saving to the database failed: ${persistError.message}`
+              : 'Imported in the browser, but saving to the database failed.'
           );
         }
       }
@@ -525,6 +629,10 @@ const RawDataView = ({
   };
 
   const handleClearImportedData = async () => {
+    if (!isTeacher) {
+      setImportError('Only teachers can clear class data.');
+      return;
+    }
     try {
       if (workspaceId) {
         await clearWorkspaceMeasurements(workspaceId);
@@ -749,7 +857,7 @@ const RawDataView = ({
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
           </label>
           )}
-          {!isReadOnly && (
+          {!isReadOnly && isTeacher && (
           <button
             onClick={() => setConfirmState({
               variant: 'danger',

@@ -63,11 +63,26 @@ const MyPage = ({
             id: teacher.student_code || teacher.email,
           });
         }
-        const apiStudents = students.map((s) => ({
-          name: s.full_name,
-          role: `${s.period || 'P?'} • ${s.group_code || 'G?'}`,
-          id: s.student_code || s.email,
-        }));
+        const apiStudents = students.map((s) => {
+          const email = String(s.email || '').trim();
+          const code = String(s.student_code || '').trim();
+          // Prefer full email when it has a domain; bare local-parts (no @) are labeled clearly.
+          let contact = email;
+          if (email && !email.includes('@')) {
+            contact = `${email} (no domain)`;
+          } else if (!email && code) {
+            contact = code.includes('@') ? code : `${code} (no domain)`;
+          } else if (!email) {
+            contact = '—';
+          }
+          return {
+            name: s.full_name || (email.includes('@') ? email.split('@')[0] : email) || code || 'Student',
+            role: `${s.period || 'P?'} · ${s.group_code || 'G?'}`,
+            contact,
+            studentCode: code,
+            email,
+          };
+        });
         setGroupMembers(apiStudents);
       } catch {
         // keep existing static fallback when API unavailable
@@ -247,12 +262,12 @@ const MyPage = ({
                 className="w-24 h-24 mx-auto rounded-full flex items-center justify-center text-3xl font-bold text-white mb-4"
                 style={{ background: `linear-gradient(135deg, ${theme.primary} 0%, ${theme.primary}CC 100%)` }}
               >
-                {isTeacherRole ? profileInitials() : (viewerProfile.studentId || filters.studentId || 'STU000').slice(3)}
+                {profileInitials()}
               </div>
               <h2 className="text-xl font-bold text-gray-900 mb-1">
                 {isTeacherRole
                   ? viewerProfile.displayName || me?.user?.full_name || 'Instructor'
-                  : viewerProfile.studentId || filters.studentId}
+                  : viewerProfile.displayName || me?.user?.full_name || viewerProfile.studentId || filters.studentId || 'Student'}
               </h2>
               <p className="text-sm text-gray-600">
                 {isTeacherRole
@@ -496,12 +511,20 @@ const MyPage = ({
                           >
                             {member.name.charAt(0)}
                           </div>
-                          <div className="flex-1">
-                            <p className="font-medium text-gray-900">{member.name}</p>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 truncate">{member.name}</p>
                             <p className="text-sm text-gray-600">{member.role}</p>
                           </div>
-                          <span className="text-xs text-gray-500 font-mono">{member.id}</span>
-                          {member.id === filters.studentId && (
+                          <span
+                            className="max-w-[11rem] truncate text-xs text-gray-500 font-mono"
+                            title={member.contact}
+                          >
+                            {member.contact}
+                          </span>
+                          {(
+                            (member.studentCode && member.studentCode === (viewerProfile.studentId || filters.studentId))
+                            || (member.email && me?.user?.email && member.email.toLowerCase() === String(me.user.email).toLowerCase())
+                          ) && (
                             <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">
                               You
                             </span>

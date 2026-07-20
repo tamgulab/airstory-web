@@ -78,10 +78,16 @@ components:
           enum: [teacher, student]
         period:
           type: string
-          description: Optional pre-placement period for student invitees (teacher assigns the group later)
+          description: Optional pre-placement period for student invitees
           example: P3
         group_code:
           type: string
+          description: Optional pre-placement group; applied to the student profile on accept
+          example: G2
+        full_name:
+          type: string
+          description: Optional display name pre-filled on the invitee join form
+          example: Ava Martinez
         token:
           type: string
           description: >
@@ -120,6 +126,12 @@ components:
           enum: [teacher, student]
         period:
           type: string
+        groupCode:
+          type: string
+          description: Optional pre-placement group for student invitees
+        fullName:
+          type: string
+          description: Optional display name teachers pre-assigned; pre-filled on the join form
         invitedBy:
           type: string
         expiresAt:
@@ -907,23 +919,54 @@ paths:
           application/json:
             schema:
               type: object
-              required: [emails, role]
+              required: [role]
+              description: >
+                Provide `emails` (shared period/groupCode) and/or `invitees` (per-person placement).
+                At least one email is required across both fields (max 50 unique).
               properties:
                 emails:
                   type: array
-                  minItems: 1
                   maxItems: 50
                   items:
                     type: string
                     format: email
+                invitees:
+                  type: array
+                  maxItems: 50
+                  description: Per-person invites; period/groupCode are applied when the student accepts.
+                  items:
+                    type: object
+                    required: [email]
+                    properties:
+                      email:
+                        type: string
+                        format: email
+                      period:
+                        type: string
+                        maxLength: 16
+                        example: P1
+                      groupCode:
+                        type: string
+                        maxLength: 16
+                        example: G2
+                      fullName:
+                        type: string
+                        maxLength: 80
+                        description: Optional; pre-fills the join form name field
+                        example: Ava Martinez
                 role:
                   type: string
                   enum: [teacher, student]
                 period:
                   type: string
                   maxLength: 16
-                  description: Optional pre-placement period for student invitees; ignored for teachers
+                  description: Shared default period for bare emails; ignored for teachers; invitees may override
                   example: P3
+                groupCode:
+                  type: string
+                  maxLength: 16
+                  description: Shared default group for bare emails; ignored for teachers; invitees may override
+                  example: G1
       responses:
         '201':
           description: Invitations created or refreshed
@@ -1870,7 +1913,7 @@ paths:
   /analytics/openaq/daily:
     get:
       tags: [Analytics]
-      summary: Fetch daily reference air quality data from OpenAQ
+      summary: Fetch daily reference air quality (OpenAQ, then WAQI fallback)
       parameters:
         - name: lat
           in: query
@@ -1903,7 +1946,7 @@ paths:
             default: pm25
       responses:
         '200':
-          description: OpenAQ daily measurements (variable structure)
+          description: Daily reference points; may include source openaq|waqi
           content:
             application/json:
               schema:
@@ -1915,7 +1958,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: OpenAQ API key not configured
+          description: Neither OpenAQ nor WAQI credentials configured
           content:
             application/json:
               schema:
@@ -1924,7 +1967,7 @@ paths:
   /analytics/openaq/heatmap:
     get:
       tags: [Analytics]
-      summary: Fetch nearby OpenAQ sensor locations for a heatmap overlay
+      summary: Nearby reference sensors for heatmap (OpenAQ, then WAQI fallback)
       parameters:
         - name: lat
           in: query
@@ -1955,7 +1998,7 @@ paths:
             description: Maximum number of sensor locations to return
       responses:
         '200':
-          description: OpenAQ sensor locations (variable structure)
+          description: Reference sensor locations; may include source openaq|waqi
           content:
             application/json:
               schema:
@@ -1967,7 +2010,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: OpenAQ API key not configured
+          description: Neither OpenAQ nor WAQI credentials configured
           content:
             application/json:
               schema:

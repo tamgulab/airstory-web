@@ -7,7 +7,7 @@ import { getSchools } from '../api/schools';
 jest.mock('react-map-gl/maplibre', () => {
   const ReactModule = require('react');
   const MapMock = ReactModule.forwardRef(({ children, onLoad }, ref) => {
-    ReactModule.useImperativeHandle(ref, () => ({ flyTo: jest.fn() }));
+    ReactModule.useImperativeHandle(ref, () => ({ flyTo: jest.fn(), fitBounds: jest.fn() }));
     ReactModule.useEffect(() => {
       onLoad?.();
     }, [onLoad]);
@@ -38,13 +38,15 @@ jest.mock('../api/schools', () => ({
 }));
 
 jest.mock('../utils/importedData', () => ({
+  isBlankHierarchyField: (value) => !String(value ?? '').trim(),
   getImportedMeasurements: () => [
     {
       id: 'one',
+      sessionId: 'walk-a',
       date: '2026-07-17',
       time: '10:00',
-      latitude: 39.95,
-      longitude: -75.16,
+      latitude: 40.0401,
+      longitude: -75.0312,
       pm25: 8,
       school: 'Test School',
       instructor: 'Teacher',
@@ -53,15 +55,42 @@ jest.mock('../utils/importedData', () => ({
     },
     {
       id: 'two',
+      sessionId: 'walk-a',
       date: '2026-07-17',
       time: '10:05',
-      latitude: 39.96,
-      longitude: -75.15,
+      latitude: 40.0404,
+      longitude: -75.0316,
       pm25: 9,
       school: 'Test School',
       instructor: 'Teacher',
       period: '1',
       group: 'A',
+    },
+    {
+      id: 'three',
+      sessionId: 'walk-b',
+      date: '2026-07-17',
+      time: '10:00',
+      latitude: 40.0410,
+      longitude: -75.0305,
+      pm25: 11,
+      school: 'Test School',
+      instructor: 'Teacher',
+      period: '1',
+      group: 'B',
+    },
+    {
+      id: 'four',
+      sessionId: 'walk-b',
+      date: '2026-07-17',
+      time: '10:08',
+      latitude: 40.0413,
+      longitude: -75.0308,
+      pm25: 12,
+      school: 'Test School',
+      instructor: 'Teacher',
+      period: '1',
+      group: 'B',
     },
   ],
 }));
@@ -96,6 +125,42 @@ test('keeps student trails visible and loads OpenAQ only after heatmap is enable
   expect(screen.getByRole('button', { name: /heatmap on/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Philadelphia' })).toBeInTheDocument();
   await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(expect.stringContaining('/analytics/openaq/heatmap?')));
+});
+
+test('compares team trails across Team / Class / School scope', () => {
+  getSchools.mockResolvedValue({ schools: [] });
+
+  render(<HeatMapDashboard {...dashboardProps} />);
+
+  const scope = screen.getByRole('group', { name: /trail compare scope/i });
+  expect(scope).toBeInTheDocument();
+
+  // Default Class scope: color by period (groups A+B share Period 1).
+  expect(screen.getByText('Class trails · by period')).toBeInTheDocument();
+  expect(screen.getByText('Period 1')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Team' }));
+  expect(screen.getByText('Team trail')).toBeInTheDocument();
+  expect(screen.getByText('A')).toBeInTheDocument();
+  expect(screen.queryByText('B')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'School' }));
+  expect(screen.getByText('School trails · by class')).toBeInTheDocument();
+  expect(screen.getByText('Teacher')).toBeInTheDocument();
+});
+
+test('keeps trails when profile school name does not match CSV school code', () => {
+  getSchools.mockResolvedValue({ schools: [] });
+
+  render(
+    <HeatMapDashboard
+      {...dashboardProps}
+      filters={{ ...dashboardProps.filters, school: 'Bronx High School Of Science' }}
+    />
+  );
+
+  expect(screen.getByTestId('source-measurement-trail-data')).toBeInTheDocument();
+  expect(screen.getByText('Period 1')).toBeInTheDocument();
 });
 
 test('shows the current-location marker after geolocation succeeds', async () => {

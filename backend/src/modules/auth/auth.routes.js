@@ -126,7 +126,11 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
       `INSERT INTO users (email, firebase_uid, full_name)
        VALUES ($1, $2, $3)
        RETURNING id, email, full_name`,
-      [accountEmail, firebaseUid, fullName]
+      [
+        accountEmail,
+        firebaseUid,
+        String(fullName || "").trim() || String(invite?.full_name || "").trim() || accountEmail.split("@")[0],
+      ]
     );
     const user = userResult.rows[0];
 
@@ -344,6 +348,8 @@ router.get("/invitations/:token", validate(inviteTokenSchema), async (req, res) 
     email: invite.email,
     role: invite.role,
     period: invite.period || "",
+    groupCode: invite.group_code || "",
+    fullName: invite.full_name || "",
     invitedBy: invite.invited_by_name || "",
     expiresAt: invite.expires_at,
   });
@@ -469,7 +475,7 @@ router.get(
     const { workspaceId } = req.params;
     // Token is included so teachers can re-copy pending invite links; the route is teacher-gated.
     const result = await pool.query(
-      `SELECT i.id, i.email, i.role, i.period, i.group_code, i.token, i.status,
+      `SELECT i.id, i.email, i.role, i.period, i.group_code, i.full_name, i.token, i.status,
               i.created_at, i.expires_at, i.accepted_at,
               u.full_name AS invited_by_name
        FROM invitations i
@@ -526,34 +532,62 @@ router.post(
     const client = await pool.connect();
     try {
       const { workspaceId } = req.params;
-      const { emails, role, period } = req.validated.body;
-      const uniqueEmails = [...new Set(emails)];
+      const { emails = [], invitees = [], role, period = "", groupCode = "" } = req.validated.body;
+      // invitees win on duplicate emails; bare emails inherit the shared period/groupCode.
+      const byEmail = new Map();
+      for (const email of emails) {
+        byEmail.set(email, {
+          email,
+          period: role === "student" ? period : "",
+          groupCode: role === "student" ? groupCode : "",
+          fullName: "",
+        });
+      }
+      for (const inv of invitees) {
+        byEmail.set(inv.email, {
+          email: inv.email,
+          period: role === "student" ? (inv.period || period || "") : "",
+          groupCode: role === "student" ? (inv.groupCode || groupCode || "") : "",
+          fullName: String(inv.fullName || "").trim(),
+        });
+      }
+      const uniqueInvitees = [...byEmail.values()];
       const invitations = [];
       const skipped = [];
 
       await client.query("BEGIN");
-      for (const email of uniqueEmails) {
+      for (const inv of uniqueInvitees) {
         const member = await client.query(
           `SELECT 1
            FROM workspace_memberships wm
            JOIN users u ON u.id = wm.user_id
            WHERE wm.workspace_id = $1 AND u.email = $2`,
-          [workspaceId, email]
+          [workspaceId, inv.email]
         );
         if (member.rowCount) {
-          skipped.push({ email, reason: "already_member" });
+          skipped.push({ email: inv.email, reason: "already_member" });
           continue;
         }
         // Re-inviting a pending email regenerates the token and expiry (old link dies).
         const created = await client.query(
-          `INSERT INTO invitations (workspace_id, email, role, token, invited_by, period)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO invitations (workspace_id, email, role, token, invited_by, period, group_code, full_name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (workspace_id, email) WHERE status = 'pending'
            DO UPDATE SET role = EXCLUDED.role, token = EXCLUDED.token, period = EXCLUDED.period,
-                         invited_by = EXCLUDED.invited_by, created_at = NOW(),
-                         expires_at = NOW() + INTERVAL '14 days'
-           RETURNING id, email, role, period, group_code, token, status, created_at, expires_at`,
-          [workspaceId, email, role, makeInviteToken(), req.user.userId, role === "student" ? period : ""]
+                         group_code = EXCLUDED.group_code, full_name = EXCLUDED.full_name,
+                         invited_by = EXCLUDED.invited_by,
+                         created_at = NOW(), expires_at = NOW() + INTERVAL '14 days'
+           RETURNING id, email, role, period, group_code, full_name, token, status, created_at, expires_at`,
+          [
+            workspaceId,
+            inv.email,
+            role,
+            makeInviteToken(),
+            req.user.userId,
+            inv.period,
+            inv.groupCode,
+            inv.fullName,
+          ]
         );
         invitations.push(created.rows[0]);
       }

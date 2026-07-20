@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  Legend, ScatterChart, Scatter, CartesianGrid, ZAxis,
+  ScatterChart, Scatter, CartesianGrid, ZAxis,
 } from 'recharts';
 import {
   AlertTriangle,
@@ -21,13 +21,23 @@ import {
   X,
 } from 'lucide-react';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
-import { groupsForPeriodFromStructure, periodsFromClassStructure } from '../utils/classStructure';
+import {
+  compareHierarchyToken,
+  dedupeHierarchyTokens,
+  groupsEqual,
+  groupsForPeriodFromStructure,
+  normalizeGroupToken,
+  normalizePeriodToken,
+  periodsEqual,
+  periodsFromClassStructure,
+} from '../utils/classStructure';
 import { REFERENCE_LOCATIONS, getReferenceWeekSeries } from '../utils/referenceTrends';
 import { apiRequest } from '../api/http';
 import { getColorForValue, getStatusLabel, hasHealthThreshold } from '../utils/airQuality';
 import { detectOutliers } from '../utils/outliers';
 import SaveChartButton from './charts/SaveChartButton';
 import BoxPlot from './charts/BoxPlot';
+import ChartFrame from './charts/ChartFrame';
 import ReflectionPrompt from './charts/ReflectionPrompt';
 
 /** Shared "good defaults" axis styling: visible axis line + tick line, per the chart-defaults checklist item. */
@@ -40,12 +50,13 @@ const SendToWorkspaceButton = ({ onSendToWorkspace, buildItem, className = '' })
   return (
     <button
       type="button"
+      data-export-hide="true"
       onClick={() => onSendToWorkspace(buildItem())}
       title="Pin this chart to your Workspace tab"
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-white rounded-lg transition-all shadow-sm bg-slate-700 hover:bg-slate-800 ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-none transition-colors hover:bg-slate-50 ${className}`}
     >
-      <Pin className="h-3.5 w-3.5" />
-      Send to Workspace
+      <Pin className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+      <span className="leading-none">Send to Workspace</span>
     </button>
   );
 };
@@ -133,7 +144,7 @@ const ComparisonModal = ({
         const groupsToShow = selectedGroups.length ? selectedGroups : groupButtonList.slice(0, 3);
         if (!groupsToShow.length) return [];
         return groupsToShow.map((g, idx) => {
-          const groupRows = rows.filter((r) => r.group === g);
+          const groupRows = rows.filter((r) => groupsEqual(r.group, g));
           const series = weekdayAverageSeries(groupRows, selectedMetric);
           const values = series.map((s) => s.value ?? 0);
           const present = series.map((s) => s.value).filter((v) => v != null);
@@ -363,45 +374,39 @@ const ComparisonModal = ({
                     : 'Select at least one group/school above, or add more imported data, to plot a comparison.'}
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                  <XAxis
-                    dataKey="day"
-                    label={{ value: 'Day', position: 'insideBottom', offset: -2, style: { fill: '#6B7280', fontSize: '11px' } }}
-                    {...AXIS_LINE_PROPS}
-                  />
-                  <YAxis
-                    label={{
-                      value: metricThemes[selectedMetric].unit,
-                      angle: -90,
-                      position: 'insideLeft',
-                      style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' },
-                    }}
-                    {...AXIS_LINE_PROPS}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'white',
-                      border: 'none',
-                      borderRadius: '12px',
-                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                      padding: '12px',
-                    }}
-                  />
-                  <Legend />
-                  {comparisonData.map((item, idx) => (
-                    <Line
-                      key={idx}
-                      type="monotone"
-                      dataKey={item.name}
-                      stroke={item.color}
-                      strokeWidth={2}
-                      dot={{ fill: item.color, r: 4 }}
+              <ChartFrame
+                height={360}
+                xLabel="Day"
+                yLabel={metricThemes[selectedMetric].unit}
+                legendItems={comparisonData.map((item) => ({ label: item.name, color: item.color }))}
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                    <XAxis dataKey="day" {...AXIS_LINE_PROPS} />
+                    <YAxis {...AXIS_LINE_PROPS} />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'white',
+                        border: 'none',
+                        borderRadius: '12px',
+                        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                        padding: '12px',
+                      }}
                     />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
+                    {comparisonData.map((item, idx) => (
+                      <Line
+                        key={idx}
+                        type="monotone"
+                        dataKey={item.name}
+                        stroke={item.color}
+                        strokeWidth={2}
+                        dot={{ fill: item.color, r: 4 }}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartFrame>
             )}
           </div>
 
@@ -519,7 +524,9 @@ const AnalysisView = ({
   importedDataVersion,
   classStructure,
   onSendToWorkspace,
+  userRole = 'student',
 }) => {
+  const isTeacher = userRole === 'teacher';
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [showReferenceInfo, setShowReferenceInfo] = useState(false);
   const [activeTab, setActiveTab] = useState('overview'); // 'overview' or 'compare'
@@ -528,6 +535,9 @@ const AnalysisView = ({
   const [referenceLocation, setReferenceLocation] = useState(REFERENCE_LOCATIONS[0]?.name || 'Philadelphia');
   const [openaqPoints, setOpenaqPoints] = useState(null);
   const [openaqMeta, setOpenaqMeta] = useState({ status: 'idle', message: '' });
+  // Teachers see every period/group in the class — focus controls narrow Analysis immersion.
+  const [focusPeriod, setFocusPeriod] = useState(filters.period || 'all');
+  const [focusGroup, setFocusGroup] = useState(filters.group || 'all');
   const [openSections, setOpenSections] = useState({
     recent: true,
     trends: true,
@@ -545,42 +555,106 @@ const AnalysisView = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [importedDataVersion]
   );
+
+  const softEq = (filterVal, rowVal) => {
+    if (isBlankHierarchyField(filterVal) || isBlankHierarchyField(rowVal)) return true;
+    return String(filterVal).trim() === String(rowVal).trim();
+  };
+
+  const softPeriodEq = (filterVal, rowVal) => {
+    if (isBlankHierarchyField(filterVal) || isBlankHierarchyField(rowVal)) return true;
+    return periodsEqual(filterVal, rowVal);
+  };
+
+  const softGroupEq = (filterVal, rowVal) => {
+    if (isBlankHierarchyField(filterVal) || isBlankHierarchyField(rowVal)) return true;
+    return groupsEqual(filterVal, rowVal);
+  };
+
+  const focusPeriodOptions = useMemo(() => {
+    const fromData = imported.map((row) => String(row.period || '').trim()).filter(Boolean);
+    const fromStructure = periodsFromClassStructure(classStructure);
+    return dedupeHierarchyTokens([...fromStructure, ...fromData], 'period');
+  }, [imported, classStructure]);
+
+  const focusGroupOptions = useMemo(() => {
+    const periodFilter = focusPeriod === 'all' ? '' : focusPeriod;
+    const fromData = imported
+      .filter((row) => !periodFilter || softPeriodEq(periodFilter, row.period))
+      .map((row) => String(row.group || '').trim())
+      .filter(Boolean);
+    const fromStructure = groupsForPeriodFromStructure(
+      classStructure,
+      periodFilter || filters.period
+    );
+    return dedupeHierarchyTokens([...fromStructure, ...fromData], 'group');
+  }, [imported, classStructure, focusPeriod, filters.period]);
+
+  useEffect(() => {
+    if (focusPeriod === 'all') return;
+    const canon = normalizePeriodToken(focusPeriod);
+    const match = focusPeriodOptions.find((p) => normalizePeriodToken(p) === canon);
+    if (match && match !== focusPeriod) setFocusPeriod(match);
+    else if (focusPeriodOptions.length && !match) setFocusPeriod('all');
+  }, [focusPeriod, focusPeriodOptions]);
+
+  useEffect(() => {
+    if (focusGroup === 'all') return;
+    const canon = normalizeGroupToken(focusGroup);
+    const match = focusGroupOptions.find((g) => normalizeGroupToken(g) === canon);
+    if (match && match !== focusGroup) setFocusGroup(match);
+    else if (focusGroupOptions.length && !match) setFocusGroup('all');
+  }, [focusGroup, focusGroupOptions]);
+
   const scopedData = useMemo(() => {
     const pool = imported.length ? imported : [];
-    return pool.filter((row) => {
-      if (filters.school && row.school && row.school !== filters.school) return false;
-      if (filters.instructor && row.instructor && row.instructor !== filters.instructor) return false;
-      if (filters.period && row.period && row.period !== filters.period) return false;
-      if (filters.group && row.group && row.group !== filters.group) return false;
+    if (isTeacher) {
+      return pool.filter((row) => {
+        if (!softEq(filters.instructor, row.instructor)) return false;
+        if (focusPeriod !== 'all' && !softPeriodEq(focusPeriod, row.period)) return false;
+        if (focusGroup !== 'all' && !softGroupEq(focusGroup, row.group)) return false;
+        return true;
+      });
+    }
+    const filtered = pool.filter((row) => {
+      // School name is intentionally not filtered — CSV codes vs directory names
+      // were emptying Analysis while Raw Data still showed rows.
+      if (!softEq(filters.instructor, row.instructor)) return false;
+      if (!softPeriodEq(filters.period, row.period)) return false;
+      if (!softGroupEq(filters.group, row.group)) return false;
       return true;
     });
-  }, [imported, filters]);
+    // Students: if profile filters match nothing but the workspace cache has rows, still analyze.
+    return filtered.length ? filtered : pool;
+  }, [
+    imported,
+    isTeacher,
+    filters.instructor,
+    filters.period,
+    filters.group,
+    focusPeriod,
+    focusGroup,
+  ]);
 
   const hasData = scopedData.length > 0;
 
   const classScopeData = useMemo(() => {
-    return imported.filter((row) => {
-      if (filters.school && !isBlankHierarchyField(row.school) && row.school !== filters.school)
-        return false;
-      if (
-        filters.instructor &&
-        !isBlankHierarchyField(row.instructor) &&
-        row.instructor !== filters.instructor
-      )
-        return false;
-      if (filters.period && !isBlankHierarchyField(row.period) && row.period !== filters.period)
-        return false;
+    const filtered = imported.filter((row) => {
+      if (!softEq(filters.instructor, row.instructor)) return false;
+      if (isTeacher) {
+        if (focusPeriod !== 'all' && !softPeriodEq(focusPeriod, row.period)) return false;
+        return true;
+      }
+      if (!softPeriodEq(filters.period, row.period)) return false;
       return true;
     });
-  }, [imported, filters.school, filters.instructor, filters.period]);
+    return isTeacher ? filtered : filtered.length ? filtered : imported;
+  }, [imported, filters.instructor, filters.period, isTeacher, focusPeriod]);
 
   const schoolScopeData = useMemo(() => {
-    return imported.filter((row) => {
-      if (filters.school && !isBlankHierarchyField(row.school) && row.school !== filters.school)
-        return false;
-      return true;
-    });
-  }, [imported, filters.school]);
+    if (!isTeacher) return imported;
+    return imported.filter((row) => softEq(filters.instructor, row.instructor));
+  }, [imported, isTeacher, filters.instructor]);
 
   const monthData = useMemo(() => {
     if (!scopedData.length) return [];
@@ -611,6 +685,11 @@ const AnalysisView = ({
     return Object.fromEntries(openaqPoints.map((p) => [p.date, p.value]));
   }, [openaqPoints]);
 
+  const openaqPointsSorted = useMemo(
+    () => [...(openaqPoints || [])].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+    [openaqPoints]
+  );
+
   useEffect(() => {
     if (!weekData.length || !OPENAQ_REFERENCE_METRICS.includes(selectedMetric)) {
       setOpenaqPoints(null);
@@ -635,23 +714,31 @@ const AnalysisView = ({
         });
         const data = await apiRequest(`/analytics/openaq/daily?${q.toString()}`);
         if (cancelled) return;
-        if (data.error === 'no_sensor') {
+        if (data.error === 'no_sensor' || !(data.points || []).length) {
           setOpenaqPoints(null);
           setOpenaqMeta({
             status: 'error',
-            message: data.message || 'No OpenAQ sensor for this metric near the selected pin — using simulated reference.',
+            message:
+              selectedMetric === 'co'
+                ? 'No CO reference near this pin (WAQI fallback is PM2.5 / temp / humidity) — using simulated reference.'
+                : (data.message || 'No reference sensor for this metric near the selected pin — using simulated reference.'),
           });
           return;
         }
         setOpenaqPoints(data.points || []);
-        const label = data.locationName ? `OpenAQ @ ${data.locationName}` : 'OpenAQ';
-        setOpenaqMeta({ status: 'ok', message: label });
+        const sourceLabel = data.source === 'waqi' ? 'WAQI' : 'OpenAQ';
+        const base = data.locationName ? `${sourceLabel} @ ${data.locationName}` : sourceLabel;
+        const alignedNote =
+          data.source === 'waqi' && data.dateMatch === 'nearest_window'
+            ? ' · recent WAQI days aligned to your week'
+            : '';
+        setOpenaqMeta({ status: 'ok', message: `${base}${alignedNote}` });
       } catch (e) {
         if (cancelled) return;
         setOpenaqPoints(null);
         setOpenaqMeta({
           status: 'error',
-          message: e?.message || 'OpenAQ unavailable — using simulated reference.',
+          message: e?.message || 'Reference data unavailable — using simulated reference.',
         });
       }
     })();
@@ -660,10 +747,19 @@ const AnalysisView = ({
     };
   }, [weekData, referenceLocation, selectedMetric]);
 
-  /** Your week vs OpenAQ when a nearby sensor exists for this metric, else simulated reference. */
+  /** Your week vs OpenAQ/WAQI when available; else simulated reference. */
   const weekCompareData = useMemo(() => {
     if (!weekData.length) return [];
     const sim = getReferenceWeekSeries(referenceLocation, selectedMetric);
+    const exactHits = openaqByDate
+      ? weekData.filter((row) => openaqByDate[row.date] != null).length
+      : 0;
+    // WAQI forecast window often won't share calendar dates with an older class CSV week.
+    const alignByIndex =
+      OPENAQ_REFERENCE_METRICS.includes(selectedMetric) &&
+      openaqPointsSorted.length > 0 &&
+      exactHits === 0;
+
     return weekData.map((row, i) => {
       let reference;
       if (
@@ -672,6 +768,9 @@ const AnalysisView = ({
         openaqByDate[row.date] != null
       ) {
         reference = openaqByDate[row.date];
+      } else if (alignByIndex) {
+        const idx = Math.min(i, openaqPointsSorted.length - 1);
+        reference = openaqPointsSorted[idx].value;
       } else {
         reference = sim[i]?.value ?? sim[sim.length - 1]?.value;
       }
@@ -681,7 +780,7 @@ const AnalysisView = ({
         reference,
       };
     });
-  }, [weekData, referenceLocation, selectedMetric, openaqByDate]);
+  }, [weekData, referenceLocation, selectedMetric, openaqByDate, openaqPointsSorted]);
 
   const stats = useMemo(() => {
     const allValues = monthData.map((d) => Number(d.value));
@@ -714,11 +813,11 @@ const AnalysisView = ({
   }, [schoolScopeData, selectedMetric]);
 
   const availableCompareGroups = useMemo(() => {
-    const fromData = [...new Set(classScopeData.map((r) => r.group).filter(Boolean))];
+    const fromData = classScopeData.map((r) => r.group).filter(Boolean);
     const period = filters.period || periodsFromClassStructure(classStructure)[0];
     const fromWorkspace = groupsForPeriodFromStructure(classStructure, period);
-    const merged = [...new Set([...fromWorkspace, ...fromData])].sort();
-    return merged.filter((g) => g !== filters.group);
+    const merged = dedupeHierarchyTokens([...fromWorkspace, ...fromData], 'group');
+    return merged.filter((g) => !groupsEqual(g, filters.group));
   }, [classScopeData, filters.group, filters.period, classStructure]);
 
   const workspaceGroupsForCompare = useMemo(() => {
@@ -739,7 +838,7 @@ const AnalysisView = ({
       setCompareGroup('');
       return;
     }
-    if (!compareGroup || !availableCompareGroups.includes(compareGroup)) {
+    if (!compareGroup || !availableCompareGroups.some((g) => groupsEqual(g, compareGroup))) {
       setCompareGroup(availableCompareGroups[0]);
     }
   }, [availableCompareGroups, compareGroup]);
@@ -767,7 +866,7 @@ const AnalysisView = ({
     const dayKeys = weekData.map((d) => d.date);
     let comparisonSeries = [];
     if (compareMode === 'group' && compareGroup) {
-      comparisonSeries = makeDailySeries(classScopeData.filter((r) => r.group === compareGroup));
+      comparisonSeries = makeDailySeries(classScopeData.filter((r) => groupsEqual(r.group, compareGroup)));
     } else if (compareMode === 'class') {
       comparisonSeries = makeDailySeries(classScopeData);
     } else if (compareMode === 'school') {
@@ -800,14 +899,14 @@ const AnalysisView = ({
   const boxPlotGroups = useMemo(() => {
     const byGroup = {};
     classScopeData.forEach((row) => {
-      const key = row.group || 'Ungrouped';
+      const key = normalizeGroupToken(row.group) || 'Ungrouped';
       const value = Number(row[selectedMetric]);
       if (!Number.isFinite(value)) return;
       if (!byGroup[key]) byGroup[key] = [];
       byGroup[key].push(value);
     });
     return Object.entries(byGroup)
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => compareHierarchyToken(a[0], b[0]))
       .map(([label, values]) => ({ label, values }));
   }, [classScopeData, selectedMetric]);
 
@@ -878,7 +977,7 @@ const AnalysisView = ({
 
       {/* Compact sticky context + section rail. It replaces the large metric card and keeps
           navigation available without adding another page-level tab row. */}
-      {hasData && (
+      {(hasData || isTeacher) && (
         <div
           className="sticky top-20 z-30 flex flex-wrap items-center gap-1.5 rounded-xl border bg-white/95 px-3 py-2 shadow-md backdrop-blur"
           style={{ borderColor: theme.primary }}
@@ -895,7 +994,7 @@ const AnalysisView = ({
             </button>
           ))}
           <div className="mx-1 hidden h-6 w-px bg-gray-200 md:block" />
-          {hasHealthThreshold(selectedMetric) && (
+          {hasData && hasHealthThreshold(selectedMetric) && (
             <span
               className="px-2 py-0.5 rounded-full text-[11px] font-bold"
               style={{ backgroundColor: getColorForValue(avgValue, selectedMetric), color: '#1F2937' }}
@@ -903,8 +1002,43 @@ const AnalysisView = ({
               Avg: {getStatusLabel(avgValue, selectedMetric)}
             </span>
           )}
-          {activeTab === 'overview' && (
-            <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
+          {isTeacher && (
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              <label className="relative z-20 flex items-center gap-1.5 text-[11px] font-semibold text-gray-600">
+                <span className="shrink-0">Period</span>
+                <select
+                  value={focusPeriod}
+                  onChange={(e) => {
+                    setFocusPeriod(e.target.value);
+                    setFocusGroup('all');
+                  }}
+                  className="min-w-[7.5rem] rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800"
+                  aria-label="Focus period for analysis"
+                >
+                  <option value="all">All periods</option>
+                  {focusPeriodOptions.map((period) => (
+                    <option key={period} value={period}>{period}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="relative z-20 flex items-center gap-1.5 text-[11px] font-semibold text-gray-600">
+                <span className="shrink-0">Group</span>
+                <select
+                  value={focusGroup}
+                  onChange={(e) => setFocusGroup(e.target.value)}
+                  className="min-w-[7.5rem] rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800"
+                  aria-label="Focus group for analysis"
+                >
+                  <option value="all">All groups</option>
+                  {focusGroupOptions.map((group) => (
+                    <option key={group} value={group}>{group}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+          {activeTab === 'overview' && hasData && (
+            <div className={`flex min-w-0 flex-wrap gap-1 ${isTeacher ? 'w-full justify-end pt-1 md:w-auto md:pt-0' : 'flex-1 justify-end'}`}>
               {[
                 ['recent', 'Recent'],
                 ['trends', 'Trends'],
@@ -1019,7 +1153,7 @@ const AnalysisView = ({
                 )}
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5" data-export-hide="true">
               <SaveChartButton
                 targetRef={weekChartRef}
                 filename={`recent-week-vs-${referenceLocation}-${metricThemes[selectedMetric].label}`}
@@ -1043,14 +1177,14 @@ const AnalysisView = ({
               />
             </div>
           </div>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3" data-export-hide="true">
             <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
-              <MapPin className="h-4 w-4 text-gray-500" aria-hidden="true" />
-              Reference location
+              <MapPin className="h-4 w-4 shrink-0 text-gray-500" aria-hidden="true" />
+              <span className="shrink-0">Reference location</span>
               <select
                 value={referenceLocation}
                 onChange={(e) => setReferenceLocation(e.target.value)}
-                className="max-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
+                className="h-9 max-w-[220px] rounded-lg border border-gray-300 bg-white px-3 text-sm leading-normal text-gray-800"
               >
                 {REFERENCE_LOCATIONS.map((loc) => (
                   <option key={loc.name} value={loc.name}>
@@ -1070,51 +1204,52 @@ const AnalysisView = ({
             )}
           </div>
           {weekCompareData.length ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={weekCompareData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis
-                  dataKey="label"
-                  label={{ value: 'Day', position: 'insideBottom', offset: -2, style: { fill: '#6B7280', fontSize: '11px' } }}
-                  {...AXIS_LINE_PROPS}
-                />
-                <YAxis
-                  label={{
-                    value: metricThemes[selectedMetric].unit,
-                    angle: -90,
-                    position: 'insideLeft',
-                    style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' },
-                  }}
-                  {...AXIS_LINE_PROPS}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'white',
-                    border: 'none',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                    padding: '12px',
-                  }}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="yours" name="Your data" stroke={theme.primary} strokeWidth={3} dot={{ r: 4 }} />
-                <Line
-                  type="monotone"
-                  dataKey="reference"
-                  name={
+            <ChartFrame
+              height={260}
+              xLabel="Day"
+              yLabel={metricThemes[selectedMetric].unit}
+              legendItems={[
+                { label: 'Your data', color: theme.primary },
+                {
+                  label:
                     OPENAQ_REFERENCE_METRICS.includes(selectedMetric) &&
                     openaqMeta.status === 'ok' &&
                     openaqPoints?.length
-                      ? 'Reference (OpenAQ)'
-                      : 'Reference (simulated)'
-                  }
-                  stroke="#94a3b8"
-                  strokeWidth={2}
-                  strokeDasharray="6 4"
-                  dot={{ r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+                      ? (openaqMeta.message?.startsWith('WAQI')
+                        ? 'Reference (WAQI)'
+                        : 'Reference (OpenAQ)')
+                      : 'Reference (simulated)',
+                  color: '#94a3b8',
+                },
+              ]}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={weekCompareData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="label" {...AXIS_LINE_PROPS} />
+                  <YAxis {...AXIS_LINE_PROPS} />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'white',
+                      border: 'none',
+                      borderRadius: '12px',
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                      padding: '12px',
+                    }}
+                  />
+                  <Line type="monotone" dataKey="yours" name="Your data" stroke={theme.primary} strokeWidth={3} dot={{ r: 4 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="reference"
+                    name="Reference"
+                    stroke="#94a3b8"
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                    dot={{ r: 3 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartFrame>
           ) : (
             <p className="text-sm text-gray-500 py-8 text-center">Not enough dated points in this filter for a week chart.</p>
           )}
@@ -1126,7 +1261,7 @@ const AnalysisView = ({
         <div ref={monthChartRef} className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
           <div className="flex items-start justify-between gap-3 mb-1">
             <h2 className="text-lg font-semibold text-gray-900">Your measurements over time</h2>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" data-export-hide="true">
               <SaveChartButton
                 targetRef={monthChartRef}
                 filename={`time-series-${metricThemes[selectedMetric].label}-${metricThemes[selectedMetric].unit}`}
@@ -1148,46 +1283,39 @@ const AnalysisView = ({
           </div>
           <p className="text-xs text-gray-500 mb-4">Daily average for the selected metric (all days in your current filter).</p>
           {monthData.length >= 2 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={monthData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis
-                  dataKey="date"
-                  style={{ fontSize: '10px' }}
-                  stroke="#9CA3AF"
-                  tickLine={true}
-                  axisLine={{ stroke: '#9CA3AF' }}
-                  interval={4}
-                  label={{ value: 'Date', position: 'insideBottom', offset: -2, style: { fill: '#6B7280', fontSize: '11px' } }}
-                />
-                <YAxis
-                  label={{
-                    value: metricThemes[selectedMetric].unit,
-                    angle: -90,
-                    position: 'insideLeft',
-                    style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' },
-                  }}
-                  {...AXIS_LINE_PROPS}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'white',
-                    border: 'none',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                    padding: '12px',
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  name="Your data"
-                  stroke={theme.primary}
-                  strokeWidth={2}
-                  dot={{ fill: theme.primary, r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartFrame height={260} xLabel="Date" yLabel={metricThemes[selectedMetric].unit}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={monthData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis
+                    dataKey="date"
+                    style={{ fontSize: '10px' }}
+                    stroke="#9CA3AF"
+                    tickLine
+                    axisLine={{ stroke: '#9CA3AF' }}
+                    interval={4}
+                  />
+                  <YAxis {...AXIS_LINE_PROPS} />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'white',
+                      border: 'none',
+                      borderRadius: '12px',
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                      padding: '12px',
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    name="Your data"
+                    stroke={theme.primary}
+                    strokeWidth={2}
+                    dot={{ fill: theme.primary, r: 3 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartFrame>
           ) : (
             <p className="text-sm text-gray-500 py-12 text-center">
               Add more days of data (or relax filters) to see a time series.
@@ -1207,7 +1335,7 @@ const AnalysisView = ({
               How your {metricThemes[selectedMetric].label} readings ({metricThemes[selectedMetric].unit}) spread across ranges.
             </p>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" data-export-hide="true">
             <SaveChartButton
               targetRef={distributionChartRef}
               filename={`${metricThemes[selectedMetric].label}-${metricThemes[selectedMetric].unit}-value-distribution`}
@@ -1233,41 +1361,38 @@ const AnalysisView = ({
             />
           </div>
         </div>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={[
-            { range: '0-10', count: allValues.filter(v => v >= 0 && v <= 10).length },
-            { range: '11-15', count: allValues.filter(v => v > 10 && v <= 15).length },
-            { range: '16-20', count: allValues.filter(v => v > 15 && v <= 20).length },
-            { range: '21-25', count: allValues.filter(v => v > 20 && v <= 25).length },
-            { range: '26+', count: allValues.filter(v => v > 25).length }
-          ]}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-            <XAxis
-              dataKey="range"
-              label={{
-                value: `${metricThemes[selectedMetric].label} range (${metricThemes[selectedMetric].unit})`,
-                position: 'insideBottom',
-                offset: -2,
-                style: { fill: '#6B7280', fontSize: '11px' },
-              }}
-              {...AXIS_LINE_PROPS}
-            />
-            <YAxis
-              label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' } }}
-              {...AXIS_LINE_PROPS}
-            />
-            <Tooltip 
-              contentStyle={{ 
-                background: 'white', 
-                border: 'none', 
-                borderRadius: '12px', 
-                boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                padding: '12px'
-              }} 
-            />
-            <Bar dataKey="count" fill={theme.primary} radius={[8, 8, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <ChartFrame
+          height={260}
+          xLabel={`${metricThemes[selectedMetric].label} range (${metricThemes[selectedMetric].unit})`}
+          yLabel="Count"
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={[
+                { range: '0-10', count: allValues.filter((v) => v >= 0 && v <= 10).length },
+                { range: '11-15', count: allValues.filter((v) => v > 10 && v <= 15).length },
+                { range: '16-20', count: allValues.filter((v) => v > 15 && v <= 20).length },
+                { range: '21-25', count: allValues.filter((v) => v > 20 && v <= 25).length },
+                { range: '26+', count: allValues.filter((v) => v > 25).length },
+              ]}
+              margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+              <XAxis dataKey="range" {...AXIS_LINE_PROPS} />
+              <YAxis {...AXIS_LINE_PROPS} />
+              <Tooltip
+                contentStyle={{
+                  background: 'white',
+                  border: 'none',
+                  borderRadius: '12px',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                  padding: '12px',
+                }}
+              />
+              <Bar dataKey="count" fill={theme.primary} radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartFrame>
       </div>
       )}
 
@@ -1282,7 +1407,7 @@ const AnalysisView = ({
             </p>
           </div>
           {boxPlotGroups.length > 0 && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" data-export-hide="true">
               <SaveChartButton
                 targetRef={boxPlotRef}
                 filename={`${metricThemes[selectedMetric].label}-${metricThemes[selectedMetric].unit}-box-plot-by-team`}
@@ -1315,12 +1440,12 @@ const AnalysisView = ({
             </h2>
             <p className="text-xs text-gray-500">Each point is one measurement, colored by team.</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex shrink-0 items-center gap-2" data-export-hide="true">
             <span className="text-xs font-semibold text-gray-500">Compare with:</span>
             <select
               value={scatterMetric}
               onChange={(e) => setScatterMetric(e.target.value)}
-              className="text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white"
+              className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm leading-normal"
             >
               {Object.entries(metricThemes)
                 .filter(([key]) => key !== selectedMetric)
@@ -1353,41 +1478,35 @@ const AnalysisView = ({
           </div>
         </div>
         {scatterData.length ? (
-          <ResponsiveContainer width="100%" height={320}>
-            <ScatterChart>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-              <XAxis
-                type="number"
-                dataKey="x"
-                name={metricThemes[selectedMetric].label}
-                label={{
-                  value: `${metricThemes[selectedMetric].label} (${metricThemes[selectedMetric].unit})`,
-                  position: 'insideBottom',
-                  offset: -2,
-                  style: { fill: '#6B7280', fontSize: '11px' },
-                }}
-                {...AXIS_LINE_PROPS}
-              />
-              <YAxis
-                type="number"
-                dataKey="y"
-                name={metricThemes[scatterMetric].label}
-                label={{
-                  value: `${metricThemes[scatterMetric].label} (${metricThemes[scatterMetric].unit})`,
-                  angle: -90,
-                  position: 'insideLeft',
-                  style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' },
-                }}
-                {...AXIS_LINE_PROPS}
-              />
-              <ZAxis range={[60, 60]} />
-              <Tooltip
-                cursor={{ strokeDasharray: '3 3' }}
-                contentStyle={{ background: 'white', border: 'none', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', padding: '12px' }}
-              />
-              <Scatter data={scatterData} fill={theme.primary} fillOpacity={0.7} />
-            </ScatterChart>
-          </ResponsiveContainer>
+          <ChartFrame
+            height={280}
+            xLabel={`${metricThemes[selectedMetric].label} (${metricThemes[selectedMetric].unit})`}
+            yLabel={`${metricThemes[scatterMetric].label} (${metricThemes[scatterMetric].unit})`}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis
+                  type="number"
+                  dataKey="x"
+                  name={metricThemes[selectedMetric].label}
+                  {...AXIS_LINE_PROPS}
+                />
+                <YAxis
+                  type="number"
+                  dataKey="y"
+                  name={metricThemes[scatterMetric].label}
+                  {...AXIS_LINE_PROPS}
+                />
+                <ZAxis range={[60, 60]} />
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3' }}
+                  contentStyle={{ background: 'white', border: 'none', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', padding: '12px' }}
+                />
+                <Scatter data={scatterData} fill={theme.primary} fillOpacity={0.7} />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </ChartFrame>
         ) : (
           <p className="text-sm text-gray-500 py-12 text-center">Not enough matching data points for a scatter plot yet.</p>
         )}
@@ -1563,11 +1682,11 @@ const AnalysisView = ({
                   Compare your filtered data with OpenAQ, another group, class average, or school average.
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2" data-export-hide="true">
                 <select
                   value={compareMode}
                   onChange={(e) => setCompareMode(e.target.value)}
-                  className="text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white"
+                  className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm leading-normal"
                 >
                   <option value="openaq">vs OpenAQ reference</option>
                   <option value="group">vs another group</option>
@@ -1613,61 +1732,60 @@ const AnalysisView = ({
                 />
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={350}>
-              <LineChart data={compareChartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis
-                  dataKey="day"
-                  label={{ value: 'Day', position: 'insideBottom', offset: -2, style: { fill: '#6B7280', fontSize: '11px' } }}
-                  {...AXIS_LINE_PROPS}
-                />
-                <YAxis
-                  label={{
-                    value: metricThemes[selectedMetric].unit,
-                    angle: -90,
-                    position: 'insideLeft',
-                    style: { textAnchor: 'middle', fill: '#6B7280', fontSize: '12px' },
-                  }}
-                  {...AXIS_LINE_PROPS}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'white',
-                    border: 'none',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                    padding: '12px',
-                  }}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="yours"
-                  name="Your data"
-                  stroke={theme.primary}
-                  strokeWidth={3}
-                  dot={{ fill: theme.primary, r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="comparison"
-                  name={
+            <ChartFrame
+              height={300}
+              xLabel="Day"
+              yLabel={metricThemes[selectedMetric].unit}
+              legendItems={[
+                { label: 'Your data', color: theme.primary },
+                {
+                  label:
                     compareMode === 'openaq'
                       ? 'OpenAQ / reference'
                       : compareMode === 'group'
                         ? `Group ${compareGroup || ''}`
                         : compareMode === 'class'
                           ? 'Class average'
-                          : 'School average'
-                  }
-                  stroke="#64748b"
-                  strokeWidth={2}
-                  strokeDasharray="5 5"
-                  dot={{ fill: '#64748b', r: 4 }}
-                  connectNulls={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+                          : 'School average',
+                  color: '#64748b',
+                },
+              ]}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={compareChartData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="day" {...AXIS_LINE_PROPS} />
+                  <YAxis {...AXIS_LINE_PROPS} />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'white',
+                      border: 'none',
+                      borderRadius: '12px',
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                      padding: '12px',
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="yours"
+                    name="Your data"
+                    stroke={theme.primary}
+                    strokeWidth={3}
+                    dot={{ fill: theme.primary, r: 5 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="comparison"
+                    name="Comparison"
+                    stroke="#64748b"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={{ fill: '#64748b', r: 4 }}
+                    connectNulls={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartFrame>
             <ReflectionPrompt storageKey={`quick-compare-${compareMode}-${selectedMetric}`} mode="cer" />
           </div>
 

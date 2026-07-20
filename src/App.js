@@ -5,7 +5,7 @@ import OnboardingForm from "./components/OnboardingForm";
 import HeatMapDashboard from "./components/HeatMapDashboard";
 import RawDataView from "./components/RawDataView";
 import AnalysisView from "./components/AnalysisView";
-import WorkspaceView from "./components/WorkspaceView";
+import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
 import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap } from "lucide-react";
@@ -26,6 +26,8 @@ import { getMeasurements } from "./api/data";
 import {
   setImportedMeasurements,
   clearImportedMeasurements,
+  getImportedMeasurements,
+  isLocalImportCache,
 } from "./utils/importedData";
 import { workspaceMeasurementsToDisplayRows } from "./utils/measurementRows";
 
@@ -134,27 +136,47 @@ export default function App() {
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
   const [onboardingError, setOnboardingError] = useState("");
   const [importedDataVersion, setImportedDataVersion] = useState(0);
+  // Keep Raw Data / Heat Map mounted after first open so tab switches don't remount and look wiped.
+  const [rawDataSectionMounted, setRawDataSectionMounted] = useState(false);
+  const [heatMapSectionMounted, setHeatMapSectionMounted] = useState(false);
   /** CODAP-inspired Workspace tab: session-only saved charts (from Analysis's "Send to Workspace" or the builder). */
   const [workspaceItems, setWorkspaceItems] = useState([]);
   const handleAddWorkspaceItem = useCallback((item) => {
     setWorkspaceItems((prev) => {
       const index = prev.length;
+      const chartCount = prev.filter((entry) => entry.kind !== "note").length;
       const layout = item.layout || {
         x: 28 + (index % 3) * 390,
         y: 28 + Math.floor(index / 3) * 330,
         width: item.kind === "note" ? 320 : 370,
-        height: item.kind === "note" ? 220 : 310,
+        height: item.kind === "note" ? 220 : 360,
       };
-      return [...prev, { ...item, layout }].slice(-24);
+      const defaults =
+        item.kind === "note"
+          ? { noteColor: item.noteColor || "yellow", attachedToId: item.attachedToId || null }
+          : { linkColor: item.linkColor || ["sky", "violet", "emerald", "amber", "rose"][chartCount % 5] };
+      return [...prev, { ...item, ...defaults, layout }].slice(-24);
     });
   }, []);
   const handleRemoveWorkspaceItem = useCallback((id) => {
-    setWorkspaceItems((prev) => prev.filter((i) => i.id !== id));
+    setWorkspaceItems((prev) =>
+      prev
+        .filter((entry) => entry.id !== id)
+        .map((entry) =>
+          entry.attachedToId === id ? { ...entry, attachedToId: null } : entry
+        )
+    );
   }, []);
   const handleUpdateWorkspaceItem = useCallback((id, patch) => {
-    setWorkspaceItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
-    );
+    setWorkspaceItems((prev) => {
+      const current = prev.find((item) => item.id === id);
+      const next = prev.map((item) => (item.id === id ? { ...item, ...patch } : item));
+      // Charts drag/resize: glue attached report notes so they follow the graph.
+      if (patch.layout && current && current.kind !== 'note') {
+        return followAttachedNotes(next, id, patch.layout);
+      }
+      return next;
+    });
   }, []);
   /** Server profile placement snapshot; only when this changes do we overwrite student explorer filters (CSV / drill-down). */
   const lastProfileHierarchySnapRef = useRef("");
@@ -231,27 +253,50 @@ export default function App() {
       // so hydrate it here from the picked membership returned by the backend.
       if (membership?.workspace_id) {
         localStorage.setItem(WORKSPACE_STORAGE_KEY, membership.workspace_id);
-        setWorkspaceId(membership.workspace_id);
+        // Avoid re-setting the same id (re-triggers workspace data effects / looks like a data wipe).
+        setWorkspaceId((prev) => (prev === membership.workspace_id ? prev : membership.workspace_id));
       }
       setUserRole(nextRole);
-      setViewerProfile((prev) => ({
-        ...prev,
-        displayName: me?.user?.full_name || prev.displayName,
-        school: schoolName,
-        instructor: profile?.instructor || "",
-        period: profile?.period || "",
-        group: profile?.group_code || "",
-        studentId: profile?.student_code || prev.studentId,
-      }));
-      if (isTeacherRole) {
-        setFilters((prev) => ({
+      setViewerProfile((prev) => {
+        const next = {
           ...prev,
+          displayName: me?.user?.full_name || prev.displayName,
           school: schoolName,
-          instructor:
-            profile?.instructor != null && profile.instructor !== "" ? profile.instructor : prev.instructor,
-          period: profile?.period != null && profile.period !== "" ? profile.period : prev.period,
-          group: profile?.group_code != null && profile.group_code !== "" ? profile.group_code : prev.group,
-        }));
+          instructor: profile?.instructor || "",
+          period: profile?.period || "",
+          group: profile?.group_code || "",
+          studentId: profile?.student_code || prev.studentId,
+        };
+        if (
+          prev.displayName === next.displayName &&
+          prev.school === next.school &&
+          prev.instructor === next.instructor &&
+          prev.period === next.period &&
+          prev.group === next.group &&
+          prev.studentId === next.studentId
+        ) {
+          return prev;
+        }
+        return next;
+      });
+      if (isTeacherRole) {
+        setFilters((prev) => {
+          const instructor =
+            profile?.instructor != null && profile.instructor !== "" ? profile.instructor : prev.instructor;
+          const period =
+            profile?.period != null && profile.period !== "" ? profile.period : prev.period;
+          const group =
+            profile?.group_code != null && profile.group_code !== "" ? profile.group_code : prev.group;
+          if (
+            prev.school === schoolName &&
+            prev.instructor === instructor &&
+            prev.period === period &&
+            prev.group === group
+          ) {
+            return prev;
+          }
+          return { ...prev, school: schoolName, instructor, period, group };
+        });
       }
       if (!isTeacherRole) {
         const profileSnap = [
@@ -303,6 +348,11 @@ export default function App() {
     setImportedDataVersion((v) => v + 1);
   }, []);
 
+  useEffect(() => {
+    if (activeSection === "rawdata") setRawDataSectionMounted(true);
+    if (activeSection === "heatmap") setHeatMapSectionMounted(true);
+  }, [activeSection]);
+
   const serverMeasurementCountRef = useRef(null);
 
   useEffect(() => {
@@ -320,20 +370,26 @@ export default function App() {
         const mapped = workspaceMeasurementsToDisplayRows(result.measurements || []);
         const prev = serverMeasurementCountRef.current;
 
-        if (mc === 0) {
-          if (prev !== null && prev > 0) {
-            clearImportedMeasurements();
-            setImportedDataVersion((v) => v + 1);
-          }
-          serverMeasurementCountRef.current = 0;
+        // Never auto-clear the browser cache on an empty/transient API response — that made
+        // Raw Data / imports look like they "wiped" after ~15–60s. Explicit Clear Data handles wipes.
+        if (mc === 0 || mapped.length === 0) {
+          if (prev === null) serverMeasurementCountRef.current = 0;
           return;
         }
 
         if (prev === null || mc > prev) {
           serverMeasurementCountRef.current = mc;
-          setImportedMeasurements(mapped);
-          setImportedDataVersion((v) => v + 1);
         }
+
+        // Poll may only hydrate an empty cache. Overwriting a non-empty cache (CSV import or a
+        // prior hydrate) is what made Raw Data look wiped when switching tabs / every ~60s.
+        // RawDataView owns refresh after import; Clear Data + workspace switch empty the cache.
+        if (isLocalImportCache()) return;
+        const existing = getImportedMeasurements();
+        if (existing.length > 0) return;
+
+        setImportedMeasurements(mapped, { source: "server" });
+        setImportedDataVersion((v) => v + 1);
       } catch {
         // Offline: keep existing imported cache
       }
@@ -842,15 +898,15 @@ export default function App() {
 
       {/* Right column: top nav + main content */}
       <div className="flex-1 min-w-0 flex flex-col min-h-screen">
-      {/* Top Navigation Bar */}
+      {/* Top Navigation Bar — full-width so long school names don't crush the links */}
       <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="flex items-center justify-between h-20">
+        <div className="w-full px-6 xl:px-10 2xl:px-14">
+          <div className="flex items-center gap-4 xl:gap-8 h-20">
             {/* Logo and Brand */}
             <button
               type="button"
               onClick={() => setActiveSection('heatmap')}
-              className="flex items-center gap-3 focus:outline-none hover:opacity-80 transition-opacity"
+              className="flex shrink-0 items-center gap-3 focus:outline-none hover:opacity-80 transition-opacity"
               aria-label="Go to Heat Map"
             >
               <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
@@ -859,58 +915,77 @@ export default function App() {
             </button>
 
             {/* Main Navigation */}
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 xl:gap-2">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 return (
                   <button
                     key={item.id}
                     onClick={() => setActiveSection(item.id)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    className={`flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
                       activeSection === item.id
                         ? `bg-blue-600 text-white shadow-lg`
                         : 'text-gray-600 hover:bg-gray-100'
                     }`}
                   >
-                    <Icon className="w-5 h-5" />
+                    <Icon className="w-5 h-5 shrink-0" />
                     <span className="hidden md:inline">{item.label}</span>
                   </button>
                 );
               })}
-              
-              {/* Logout Button */}
+            </div>
+
+            {/* Account cluster: identity + logout stay together on the right */}
+            <div className="flex shrink-0 items-center gap-3 xl:gap-4">
+              {!isPublicMode && (
+                <>
+                  <div className="hidden min-w-[12rem] max-w-[16rem] text-right lg:block xl:max-w-[20rem] 2xl:max-w-[24rem]">
+                    <p className="truncate text-sm font-medium text-gray-900">
+                      {isTeacher
+                        ? (viewerProfile.displayName || viewerProfile.instructor || "Instructor")
+                        : (viewerProfile.displayName || viewerProfile.studentId || filters.studentId || "Student")}
+                    </p>
+                    <p
+                      className="truncate text-xs text-gray-500"
+                      title={viewerProfile.school || filters.school || undefined}
+                    >
+                      {viewerProfile.school || filters.school || "No school assigned"}
+                    </p>
+                    <p className="truncate text-[11px] text-gray-400">
+                      {isTeacher
+                        ? "Teacher Portal"
+                        : `Group ${(viewerProfile.group || filters.group || "").replace("G", "") || "—"}`}
+                    </p>
+                  </div>
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md shrink-0">
+                    <span className="text-white text-sm font-semibold">
+                      {isTeacher
+                        ? teacherNavInitials()
+                        : (() => {
+                            const name = (viewerProfile.displayName || "").trim();
+                            const parts = name.split(/\s+/).filter(Boolean);
+                            if (parts.length >= 2) {
+                              return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+                            }
+                            if (parts.length === 1 && parts[0].length >= 2) {
+                              return parts[0].slice(0, 2).toUpperCase();
+                            }
+                            const code = viewerProfile.studentId || filters.studentId || "ST";
+                            return code.slice(0, 2).toUpperCase();
+                          })()}
+                    </span>
+                  </div>
+                </>
+              )}
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-red-600 hover:bg-red-50 transition-all ml-2"
+                className="flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg font-medium text-red-600 hover:bg-red-50 transition-all"
                 title="Logout"
               >
                 <LogOut className="w-5 h-5" />
                 <span className="hidden lg:inline">Logout</span>
               </button>
             </div>
-
-            {/* User Info - Only show if not in public mode */}
-            {!isPublicMode && (
-              <div className="flex items-center gap-4">
-                <div className="text-right hidden lg:block">
-                  <p className="text-sm font-medium text-gray-900">
-                    {isTeacher ? (viewerProfile.instructor || "Instructor") : (viewerProfile.studentId || filters.studentId)}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {isTeacher
-                      ? `${viewerProfile.school || filters.school} • Teacher Portal`
-                      : `${viewerProfile.school || filters.school} - Group ${(viewerProfile.group || filters.group).replace('G', '')}`}
-                  </p>
-                </div>
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md">
-                  <span className="text-white text-sm font-semibold">
-                    {isTeacher
-                      ? teacherNavInitials()
-                      : (viewerProfile.studentId || filters.studentId || "STU000").slice(3)}
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </nav>
@@ -925,34 +1000,46 @@ export default function App() {
               : 'w-full max-w-7xl mx-auto px-6 py-8'
         }
       >
-        {activeSection === 'heatmap' && (
-          <HeatMapDashboard
-            workspaceId={workspaceId}
-            workspaceKind={currentWorkspaceKind}
-            schoolId={currentMembership?.school_id || null}
-            selectedMetric={selectedMetric}
-            setSelectedMetric={setSelectedMetric}
-            filters={filters}
-            setFilters={setFilters}
-            theme={currentTheme}
-            metricThemes={METRIC_THEMES}
-            importedDataVersion={importedDataVersion}
-          />
+        {(heatMapSectionMounted || activeSection === 'heatmap') && (
+          <div
+            className={activeSection === 'heatmap' ? 'block' : 'hidden'}
+            aria-hidden={activeSection !== 'heatmap'}
+          >
+            <HeatMapDashboard
+              workspaceId={workspaceId}
+              workspaceKind={currentWorkspaceKind}
+              schoolId={currentMembership?.school_id || null}
+              selectedMetric={selectedMetric}
+              setSelectedMetric={setSelectedMetric}
+              filters={filters}
+              setFilters={setFilters}
+              theme={currentTheme}
+              metricThemes={METRIC_THEMES}
+              importedDataVersion={importedDataVersion}
+            />
+          </div>
         )}
-        {activeSection === 'rawdata' && (
-          <RawDataView
-            workspaceId={workspaceId}
-            viewerProfile={viewerProfile}
-            selectedMetric={selectedMetric}
-            setSelectedMetric={setSelectedMetric}
-            filters={filters}
-            setFilters={setFilters}
-            theme={currentTheme}
-            metricThemes={METRIC_THEMES}
-            onImportedDataChanged={handleImportedDataChanged}
-            classStructure={classStructure}
-            isReadOnly={isReadOnlyWorkspace}
-          />
+        {(rawDataSectionMounted || activeSection === 'rawdata') && (
+          <div
+            className={activeSection === 'rawdata' ? 'block' : 'hidden'}
+            aria-hidden={activeSection !== 'rawdata'}
+          >
+            <RawDataView
+              workspaceId={workspaceId}
+              viewerProfile={viewerProfile}
+              selectedMetric={selectedMetric}
+              setSelectedMetric={setSelectedMetric}
+              filters={filters}
+              setFilters={setFilters}
+              theme={currentTheme}
+              metricThemes={METRIC_THEMES}
+              onImportedDataChanged={handleImportedDataChanged}
+              importedDataVersion={importedDataVersion}
+              classStructure={classStructure}
+              isReadOnly={isReadOnlyWorkspace}
+              userRole={userRole}
+            />
+          </div>
         )}
         {activeSection === 'analysis' && (
           <AnalysisView
@@ -964,6 +1051,7 @@ export default function App() {
             importedDataVersion={importedDataVersion}
             classStructure={classStructure}
             onSendToWorkspace={handleAddWorkspaceItem}
+            userRole={userRole}
           />
         )}
         {activeSection === 'workspace' && (

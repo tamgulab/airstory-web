@@ -28,6 +28,25 @@ function normalizeApiBase(raw) {
 const API_BASE = normalizeApiBase(process.env.REACT_APP_API_BASE_URL);
 
 /**
+ * Bare, unauthenticated reachability ping used to wake the backend (Render free tier spins
+ * down after inactivity, so the first request can take ~30-60s). Unlike `apiRequest`, this
+ * attaches no auth header and bounds each attempt with a timeout so callers can poll.
+ * Resolves `true` only on a healthy 2xx, `false` on timeout/network/non-ok — never throws.
+ */
+export async function pingHealth(timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Current Firebase ID token, or null when signed out. The Firebase SDK caches and refreshes
  * this automatically, so getIdToken() returns a valid (≈1 hr) token without our own refresh logic.
  */

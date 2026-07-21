@@ -13,6 +13,7 @@ import {
   resetStudentPasswordSchema,
   revokeInvitationSchema,
   setWorkspaceSchoolSchema,
+  updateAccountProfileSchema,
   updateClassStructureSchema,
   updateMyProfileSchema,
   updateStudentPlacementSchema,
@@ -130,6 +131,14 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
     );
     const user = userResult.rows[0];
 
+    // Global account profile (workspace-independent), seeded with the account name.
+    await client.query(
+      `INSERT INTO account_profiles (user_id, display_name)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [user.id, fullName]
+    );
+
     let workspaceId;
     let membershipRole;
     if (invite) {
@@ -202,8 +211,16 @@ router.post("/register", validate(registerSchema), async (req, res, next) => {
 // remain server-side via the Admin SDK — see POST /workspaces/:workspaceId/users/:userId/reset-password.
 
 router.get("/me", requireAuth, async (req, res) => {
+  // The global account profile lives in account_profiles (one row per user, no workspace).
+  // LEFT JOIN + COALESCE so accounts predating the row still resolve to sensible defaults.
   const userResult = await pool.query(
-    `SELECT id, email, full_name FROM users WHERE id = $1`,
+    `SELECT u.id, u.email, u.full_name,
+            COALESCE(NULLIF(ap.display_name, ''), u.full_name) AS display_name,
+            COALESCE(ap.title, '') AS title,
+            COALESCE(ap.bio, '') AS bio
+     FROM users u
+     LEFT JOIN account_profiles ap ON ap.user_id = u.id
+     WHERE u.id = $1`,
     [req.user.userId]
   );
   // One membership per workspace, each with its own profile. The client picks the
@@ -236,11 +253,46 @@ router.get("/me", requireAuth, async (req, res) => {
       student_code: row.student_code || "",
     },
   }));
+  const row = userResult.rows[0];
   res.json({
-    user: userResult.rows[0],
+    user: { id: row.id, email: row.email, full_name: row.full_name },
+    // Global account profile — the same in every workspace (see PATCH /auth/me/account-profile).
+    profile: {
+      display_name: row.display_name || "",
+      title: row.title || "",
+      bio: row.bio || "",
+    },
     memberships,
   });
 });
+
+// Update the global account profile (same in every workspace). Partial: only provided fields
+// change. Upsert so accounts predating account_profiles get a row on first edit.
+router.patch(
+  "/me/account-profile",
+  requireAuth,
+  validate(updateAccountProfileSchema),
+  async (req, res, next) => {
+    try {
+      const body = req.validated.body;
+      const updated = await pool.query(
+        `INSERT INTO account_profiles (user_id, display_name, title, bio)
+         VALUES ($1, COALESCE($2, ''), COALESCE($3, ''), COALESCE($4, ''))
+         ON CONFLICT (user_id) DO UPDATE SET
+           display_name = COALESCE($2, account_profiles.display_name),
+           title = COALESCE($3, account_profiles.title),
+           bio = COALESCE($4, account_profiles.bio),
+           updated_at = NOW()
+         RETURNING display_name, title, bio`,
+        [req.user.userId, body.displayName ?? null, body.title ?? null, body.bio ?? null]
+      );
+      const p = updated.rows[0];
+      res.json({ profile: { display_name: p.display_name, title: p.title, bio: p.bio } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 router.patch("/me/profile", requireAuth, validate(updateMyProfileSchema), async (req, res, next) => {
   try {

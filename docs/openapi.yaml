@@ -63,6 +63,22 @@ components:
         student_code:
           type: string
 
+    AccountProfile:
+      type: object
+      description: >
+        Global (account-level) profile — the same in every workspace, unlike UserProfile which is
+        per-workspace. Backed by the account_profiles table (one row per user).
+      properties:
+        display_name:
+          type: string
+          description: User-facing name; defaults to the account's full_name until edited.
+        title:
+          type: string
+          description: Free-text role/title (e.g. "Student", "Instructor", "Researcher").
+        bio:
+          type: string
+          description: Short self-description.
+
     Invitation:
       type: object
       properties:
@@ -524,9 +540,10 @@ paths:
       tags: [Auth]
       summary: Get the authenticated user's info and per-workspace memberships
       description: >
-        Each membership embeds its workspace-scoped profile. There is no server-side notion of
-        a "current" workspace — the client picks one (persisted locally) and passes workspaceId
-        to workspace-scoped endpoints.
+        Returns the account's global profile (`profile`, the same in every workspace) plus one
+        membership per workspace, each embedding its own workspace-scoped profile. There is no
+        server-side notion of a "current" workspace — the client picks one (persisted locally)
+        and passes workspaceId to workspace-scoped endpoints.
       responses:
         '200':
           description: Current user
@@ -546,6 +563,8 @@ paths:
                         format: email
                       full_name:
                         type: string
+                  profile:
+                    $ref: '#/components/schemas/AccountProfile'
                   memberships:
                     type: array
                     items:
@@ -576,6 +595,48 @@ paths:
                           enum: [teacher, student]
                         profile:
                           $ref: '#/components/schemas/UserProfile'
+
+  /auth/me/account-profile:
+    patch:
+      tags: [Auth]
+      summary: Update the authenticated user's global account profile
+      description: >
+        Updates the account-level profile (same in every workspace). Partial update — only the
+        fields provided change; at least one must be present. Upserts, so accounts predating the
+        account_profiles table get a row on first edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                displayName:
+                  type: string
+                  maxLength: 120
+                title:
+                  type: string
+                  maxLength: 80
+                bio:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Updated global profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    $ref: '#/components/schemas/AccountProfile'
+        '400':
+          description: No updatable fields provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/me/profile:
     patch:

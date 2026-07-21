@@ -1,12 +1,11 @@
-# Project Rules
+# General Guidelines
 
-This is the **AirStory web platform**: a React frontend in `src/` and an Express/Postgres backend in `backend/`.
+- Never use the em dash. Use plain dash instead.
+- When writing commit message, NEVER auto-add your agent name as co-author.
+- When making technical decisions, do not give much weight to development cost.
 
-## Build
+# Build
 - The live site builds from the **repo root only**.
-
-## Do not touch
-- Never modify `air-quality-tracker/`, `keepsake/`, or `keepsake-pre-backend/`. They are legacy snapshots.
 
 ## Version control
 - `node_modules` must **never** be committed.
@@ -19,9 +18,7 @@ This is the **AirStory web platform**: a React frontend in `src/` and an Express
 - All work happens in short-lived `feature/*` branches created FROM dev.
 - Feature branches merge into dev DIRECTLY (no pull request), then get deleted.
 - dev merges into main ONLY via a pull request, with review. This is the single review gate.
-- Flow: feature/* —(merge)—> dev —(PR)—> main
 - Before starting any work, confirm the current branch. If on main, stop and switch.
-- DEV-only flags (DEV_SKIP_LOGIN, DEV_ROLE, MOCK_DATA_ENABLED) must be OFF in anything merged toward main.
 
 ## Team structure
 - Full-stack feature ownership: each member owns features end to end (frontend + backend).

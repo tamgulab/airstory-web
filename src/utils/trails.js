@@ -66,8 +66,15 @@ export function splitIntoTrailSegments(
 /**
  * Keep points near the school when possible; if that wipes everything, keep the original
  * set so trails still show (school pin / GPS region mismatch is common in demos).
+ * Pass fallbackToAll: false when a school is explicitly focused so the map does not jump
+ * to unrelated campuses (e.g. Vietnam pin → New York trails).
  */
-export function preferPointsNearSchool(points, schoolPin, maxMeters = MAX_DISTANCE_FROM_SCHOOL_METERS) {
+export function preferPointsNearSchool(
+  points,
+  schoolPin,
+  maxMeters = MAX_DISTANCE_FROM_SCHOOL_METERS,
+  { fallbackToAll = true } = {}
+) {
   if (!schoolPin || !points.length) return points;
   const nearby = points.filter(
     (point) =>
@@ -76,7 +83,8 @@ export function preferPointsNearSchool(points, schoolPin, maxMeters = MAX_DISTAN
         { lat: schoolPin.lat, lng: schoolPin.lng }
       ) <= maxMeters
   );
-  return nearby.length ? nearby : points;
+  if (nearby.length) return nearby;
+  return fallbackToAll ? points : [];
 }
 
 function pointDateKey(point) {
@@ -88,42 +96,38 @@ function pointDateKey(point) {
 }
 
 /**
- * Color bucketing for Team / Class / School trail compare:
- * - team  → each group/team gets its own color
- * - class → color by period (Period 1 groups 1/2/3 share a color)
- * - school → color by class/instructor (all periods/groups in that class share a color)
+ * Color bucketing for Group / Class / School trail compare:
+ * - group / class / school → each group gets its own color (paths stay distinct)
+ * - world → no trails (handled by the dashboard)
  */
 export function trailColorKey(point, trailScope = 'class') {
   const school = String(point.school ?? '').trim() || 'School';
   const instructor = String(point.instructor ?? '').trim() || 'Class';
   const period = String(point.period ?? '').trim() || 'Period';
-  const group = String(point.group ?? '').trim() || 'Team';
-  if (trailScope === 'school') return `class:${school}|${instructor}`;
-  if (trailScope === 'class') return `period:${school}|${instructor}|${period}`;
-  return `team:${school}|${instructor}|${period}|${group}`;
+  const group = String(point.group ?? '').trim() || 'Group';
+  if (trailScope === 'world') return `world:${school}`;
+  // School / class / group all color by group so campus trails stay readable.
+  return `group:${school}|${instructor}|${period}|${group}`;
 }
 
 function trailLegendLabel(point, trailScope = 'class') {
-  const instructor = String(point.instructor ?? '').trim();
-  const period = String(point.period ?? '').trim();
-  const group = String(point.group ?? '').trim() || 'Team';
-  if (trailScope === 'school') return instructor || 'Class';
-  if (trailScope === 'class') return period ? `Period ${period}` : 'Period';
+  const group = String(point.group ?? '').trim() || 'Group';
+  if (trailScope === 'world') return String(point.school ?? '').trim() || 'School';
   return group;
 }
 
 /**
  * Build colored trail geometry from geotagged measurement rows.
  *
- * One polyline per team per calendar day, vertices in time order — so classroom /
+ * One polyline per group per calendar day, vertices in time order — so classroom /
  * hallway / yard samples become a connected daily path instead of scattered dots.
- * Colors follow trailScope (team / period / class) while paths stay per-team.
+ * Colors follow trailScope (group / class / school) while paths stay per-group.
  */
 export function buildTeamTrailSegments(points, { trailScope = 'class' } = {}) {
   const byTeam = new Map();
 
   points.forEach((point) => {
-    const groupLabel = String(point.group ?? '').trim() || 'Team';
+    const groupLabel = String(point.group ?? '').trim() || 'Group';
     const teamKey = [point.school, point.instructor, point.period, groupLabel].join('|');
     const colorKey = trailColorKey({ ...point, group: groupLabel }, trailScope);
     const label = trailLegendLabel({ ...point, group: groupLabel }, trailScope);

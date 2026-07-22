@@ -74,6 +74,37 @@ export function uniqueHierarchyFromImportedRows(rows) {
   return out;
 }
 
+/** Stable-ish row key so a new CSV can merge with existing cache instead of wiping it. */
+export function measurementRowMergeKey(row) {
+  return [
+    row?.sessionId ?? "",
+    row?.capturedAt ?? `${row?.date ?? ""}T${row?.time ?? ""}`,
+    row?.latitude ?? "",
+    row?.longitude ?? "",
+    row?.school ?? "",
+    row?.instructor ?? "",
+    row?.period ?? "",
+    row?.group ?? "",
+    row?.location ?? "",
+  ].join("|");
+}
+
+/** Union two measurement lists (incoming wins on key collision). Keeps prior schools when importing another CSV. */
+export function mergeImportedMeasurementRows(existing = [], incoming = []) {
+  const map = new Map();
+  (Array.isArray(existing) ? existing : []).forEach((row) => {
+    if (row) map.set(measurementRowMergeKey(row), row);
+  });
+  (Array.isArray(incoming) ? incoming : []).forEach((row) => {
+    if (row) map.set(measurementRowMergeKey(row), row);
+  });
+  return [...map.values()].sort((a, b) => {
+    const ta = new Date(a.capturedAt || `${a.date}T${a.time || "00:00"}`).getTime();
+    const tb = new Date(b.capturedAt || `${b.date}T${b.time || "00:00"}`).getTime();
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+  });
+}
+
 export function setImportedMeasurements(data, { source = "server" } = {}) {
   const payload = JSON.stringify(data || []);
   try {

@@ -84,7 +84,7 @@ const indoorOutdoorImport = z.preprocess((val) => {
 }, z.enum(["INDOOR", "OUTDOOR"]));
 
 const importRowSchema = z.object({
-  capturedAt: z.string().datetime(),
+  capturedAt: z.string().datetime({ offset: true }),
   sessionCode: z.string().min(1).optional().default("SESSION"),
   sessionName: z.string().min(1).optional().default("Imported Session"),
   sessionNotes: z.string().optional().default(""),

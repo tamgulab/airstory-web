@@ -678,12 +678,25 @@ export default function App() {
 
   const currentTheme = METRIC_THEMES[selectedMetric];
 
+  const [mapSchoolFocus, setMapSchoolFocus] = useState(null);
+
   const handleTeacherSelectGroup = ({ period, group }) => {
     setFilters((prev) => ({
       ...prev,
       period: period || prev.period,
       group: group || prev.group,
     }));
+    setMapSchoolFocus(null);
+    setActiveSection("rawdata");
+  };
+
+  const handleOpenSchoolRawData = ({ schoolName, schoolDataLabel }) => {
+    const school = schoolName || schoolDataLabel || "";
+    setFilters((prev) => ({
+      ...prev,
+      school,
+    }));
+    setMapSchoolFocus(schoolDataLabel || schoolName || null);
     setActiveSection("rawdata");
   };
 
@@ -1016,6 +1029,7 @@ export default function App() {
               theme={currentTheme}
               metricThemes={METRIC_THEMES}
               importedDataVersion={importedDataVersion}
+              onOpenRawData={handleOpenSchoolRawData}
             />
           </div>
         )}
@@ -1038,6 +1052,7 @@ export default function App() {
               classStructure={classStructure}
               isReadOnly={isReadOnlyWorkspace}
               userRole={userRole}
+              schoolFocus={mapSchoolFocus}
             />
           </div>
         )}

@@ -132,12 +132,12 @@ test('draws a trail for every group that has geotagged points', () => {
   const { segments, markers, colorKeyOrder } = buildTeamTrailSegments(points, { trailScope: 'class' });
   expect(segments).toHaveLength(3);
   expect(markers).toHaveLength(0);
-  // Class scope: Period 1 groups share one color.
-  expect(colorKeyOrder).toHaveLength(1);
-  expect(colorKeyOrder[0]).toContain('period:');
+  // Class scope: each group gets its own color.
+  expect(colorKeyOrder).toHaveLength(3);
+  expect(colorKeyOrder.every((key) => key.startsWith('group:'))).toBe(true);
 
-  const teamScoped = buildTeamTrailSegments(points, { trailScope: 'team' });
-  expect(teamScoped.colorKeyOrder).toHaveLength(3);
+  const groupScoped = buildTeamTrailSegments(points, { trailScope: 'group' });
+  expect(groupScoped.colorKeyOrder).toHaveLength(3);
 
   const schoolScoped = buildTeamTrailSegments(
     [
@@ -155,9 +155,9 @@ test('draws a trail for every group that has geotagged points', () => {
     ],
     { trailScope: 'school' }
   );
-  // School scope: color by class/instructor (Jiin Hur vs Ms. Rivera).
-  expect(schoolScoped.colorKeyOrder).toHaveLength(2);
-  expect(schoolScoped.colorKeyOrder.every((key) => key.startsWith('class:'))).toBe(true);
+  // School scope: still one color per group (no instructor legend clutter).
+  expect(schoolScoped.colorKeyOrder).toHaveLength(5);
+  expect(schoolScoped.colorKeyOrder.every((key) => key.startsWith('group:'))).toBe(true);
 });
 
 test('static GPS sessions become markers instead of invisible zero-length lines', () => {

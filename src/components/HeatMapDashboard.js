@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { GraduationCap, Info, Layers3, LocateFixed, Share2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, GraduationCap, Info, Layers3, LocateFixed, Share2, Star } from 'lucide-react';
 import MapView, {
   FullscreenControl, Layer, Marker, NavigationControl, Popup, Source,
 } from 'react-map-gl/maplibre';
@@ -10,6 +10,7 @@ import { getSchools } from '../api/schools';
 import { apiRequest } from '../api/http';
 import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
 import { buildTeamTrailSegments, preferPointsNearSchool } from '../utils/trails';
+import { resolveDirectorySchool, schoolLabelsMatch, shortLabelFromSchoolName } from '../utils/schoolLabels';
 
 const MAP_STYLE_URL =
   process.env.REACT_APP_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
@@ -21,7 +22,7 @@ const PRESET_CITIES = Object.freeze([
   { id: 'hanoi', label: 'Hanoi', city: 'Hanoi, Vietnam', lat: 21.0278, lng: 105.8342, radius: 15000 },
 ]);
 
-/** Distinct, colorblind-considerate palette used for both team and school trail coloring. */
+/** Distinct, colorblind-considerate palette used for group / class / school trail coloring. */
 const TRAIL_COLOR_PALETTE = [
   '#2563EB', '#DC2626', '#059669', '#7C3AED', '#D97706',
   '#0891B2', '#DB2777', '#65A30D', '#4F46E5', '#EA580C',
@@ -43,33 +44,29 @@ const heatmapGradient = [
   'rgba(126, 0, 35, 1)'
 ];
 
-// Color-vision accessible palette (Viridis-like or specific colorblind safe colors)
+// Color-vision accessible palette (Viridis reversed): Good → yellow, Very Unhealthy → purple
 const accessibleGradient = [
   'rgba(0, 255, 255, 0)',
-  'rgba(68, 1, 84, 1)',
-  'rgba(59, 82, 139, 1)',
-  'rgba(33, 145, 140, 1)',
-  'rgba(94, 201, 98, 1)',
+  'rgba(255, 255, 255, 1)',
   'rgba(253, 231, 37, 1)',
-  'rgba(255, 255, 255, 1)'
+  'rgba(94, 201, 98, 1)',
+  'rgba(33, 145, 140, 1)',
+  'rgba(59, 82, 139, 1)',
+  'rgba(68, 1, 84, 1)'
 ];
 
-const SCHOOL_LABEL_SKIP = new Set(['of', 'the', 'for', 'and', 'a', 'an', 'at', 'in']);
-
-/** Short label for the map pin/control from a school name, e.g. "Lincoln High School" -> "LHS". */
-function shortLabelFromSchoolName(name) {
-  const initials = String(name || '')
-    .split(/\s+/)
-    .filter((w) => /^[A-Za-z]/.test(w) && !SCHOOL_LABEL_SKIP.has(w.toLowerCase()))
-    .map((w) => w[0].toUpperCase())
-    .join('');
-  return initials.slice(0, 4) || 'SCH';
-}
-
-/** Zoom when jumping to the partner school from the map control. */
 /** Built-in campus view — tight enough to read the school block, not the whole borough. */
 const SCHOOL_FOCUS_ZOOM = 16;
 const DEFAULT_MAP_ZOOM = 15;
+/** World overview max zoom when fitting every school that has raw-data pins. */
+const WORLD_FIT_MAX_ZOOM = 4;
+
+/** Prefer CSV school codes (e.g. BXS) on the pin when that is what raw data uses. */
+function pinShortLabel(dataLabel, displayName) {
+  const code = String(dataLabel || '').trim();
+  if (code && code.length <= 6 && /^[A-Za-z0-9]+$/.test(code)) return code.toUpperCase();
+  return shortLabelFromSchoolName(displayName || dataLabel);
+}
 
 const StatusInfoModal = ({ isOpen, onClose, theme }) => {
   if (!isOpen) return null;
@@ -143,17 +140,21 @@ const HeatMapDashboard = ({
   theme,
   metricThemes,
   importedDataVersion,
+  onOpenRawData,
 }) => {
   const [showStatusInfo, setShowStatusInfo] = useState(false);
   const [selectedTimeRange] = useState('all-time');
   const [displayMode, setDisplayMode] = useState('default'); // 'default' or 'accessible'
-  // Trail compare scope (mirrors Raw Data Group/Class/School) — always drawn from geotagged raw rows.
-  const [trailScope, setTrailScope] = useState('class'); // 'team' | 'class' | 'school'
+  // Trail compare scope: Group/Class/School show trails for a focused school; World is overview pins only.
+  const [trailScope, setTrailScope] = useState('class'); // 'group' | 'class' | 'school' | 'world'
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [selectedCityId, setSelectedCityId] = useState(PRESET_CITIES[0].id);
   const [isLoaded, setIsLoaded] = useState(false);
   const [mapLoadError, setMapLoadError] = useState('');
   const [schoolPinOpen, setSchoolPinOpen] = useState(false);
+  // Focused school id — set ONLY by pin click, prev/next, or "your school" control.
+  // Scope tabs (Group/Class/School/World) must not invent a selection.
+  const [schoolNavId, setSchoolNavId] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [isLocating, setIsLocating] = useState(false);
   const [geoError, setGeoError] = useState('');
@@ -161,6 +162,8 @@ const HeatMapDashboard = ({
   const [schoolDirectory, setSchoolDirectory] = useState([]);
   const screenshotRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  /** Skip the auto fitBounds effect after an explicit pin / prev-next / World navigation. */
+  const suppressAutoFitRef = useRef(false);
   const [openaqHeatmap, setOpenaqHeatmap] = useState(null);
   const [openaqStatus, setOpenaqStatus] = useState('idle');
   const importedMeasurements = useMemo(
@@ -190,34 +193,140 @@ const HeatMapDashboard = ({
     };
   }, []);
 
-  const activeSchoolPin = useMemo(() => {
+  /**
+   * School pins come only from geotagged Raw Data — not the full directory.
+   * Prefer directory coords when the measurement school label matches; otherwise use the
+   * centroid of that school's geotagged samples so unlisted schools still appear.
+   */
+  const mappableSchools = useMemo(() => {
+    const geotagged = importedMeasurements
+      .map((row) => {
+        const lat = Number(row.latitude);
+        const lng = Number(row.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        const label = String(row.school ?? '').trim();
+        if (!label) return null;
+        return { label, lat, lng };
+      })
+      .filter(Boolean);
+
+    const byLabel = new Map();
+    geotagged.forEach((point) => {
+      if (!byLabel.has(point.label)) byLabel.set(point.label, []);
+      byLabel.get(point.label).push(point);
+    });
+
+    const pins = [];
+    byLabel.forEach((points, label) => {
+      const lat = points.reduce((sum, p) => sum + p.lat, 0) / points.length;
+      const lng = points.reduce((sum, p) => sum + p.lng, 0) / points.length;
+      // Name/code match, then GPS centroid — so CVA near Hanoi resolves to Chu Văn An,
+      // not a false-positive like Central High School in Philadelphia.
+      const directoryMatch = resolveDirectorySchool({
+        label,
+        latitude: lat,
+        longitude: lng,
+        directory: schoolDirectory,
+      });
+      if (
+        directoryMatch &&
+        Number.isFinite(Number(directoryMatch.latitude)) &&
+        Number.isFinite(Number(directoryMatch.longitude))
+      ) {
+        pins.push({
+          id: directoryMatch.id || `data:${label}`,
+          name: directoryMatch.name,
+          dataLabel: label,
+          shortLabel: pinShortLabel(label, directoryMatch.name),
+          address: directoryMatch.name,
+          lat: Number(directoryMatch.latitude),
+          lng: Number(directoryMatch.longitude),
+        });
+        return;
+      }
+      pins.push({
+        id: `data:${label}`,
+        name: label,
+        dataLabel: label,
+        shortLabel: pinShortLabel(label, label),
+        address: label,
+        lat,
+        lng,
+      });
+    });
+
+    return pins.sort((a, b) => a.name.localeCompare(b.name));
+  }, [importedMeasurements, schoolDirectory]);
+
+  /** Class workspace's assigned school pin (My Page / membership), if it has coordinates. */
+  const classSchoolPin = useMemo(() => {
     const match = schoolDirectory.find((school) =>
       schoolId ? school.id === schoolId : school.name === filters.school
     );
     if (match && Number.isFinite(Number(match.latitude)) && Number.isFinite(Number(match.longitude))) {
       return {
+        id: match.id,
         name: match.name,
+        dataLabel: match.name,
         shortLabel: shortLabelFromSchoolName(match.name),
         address: match.name,
         lat: Number(match.latitude),
         lng: Number(match.longitude),
       };
     }
-    return null;
-  }, [schoolDirectory, schoolId, filters.school]);
+    // Fall back to a data pin that soft-matches the profile school name / code (e.g. BXS).
+    return (
+      mappableSchools.find(
+        (school) =>
+          (schoolId && school.id === schoolId) ||
+          schoolLabelsMatch(school.name, filters.school) ||
+          schoolLabelsMatch(school.dataLabel, filters.school)
+      ) || null
+    );
+  }, [schoolDirectory, schoolId, filters.school, mappableSchools]);
 
+  const browsingWorld = trailScope === 'world';
+  /** True only after the user picks a campus (pin / prev-next / home). */
+  const hasSchoolSelection = Boolean(schoolNavId);
+
+  /** Pin used for focus / trail proximity — null until a school is explicitly chosen. */
+  const activeSchoolPin = useMemo(() => {
+    if (!schoolNavId) return null;
+    const fromData = mappableSchools.find((school) => school.id === schoolNavId);
+    if (fromData) return fromData;
+    if (classSchoolPin && classSchoolPin.id === schoolNavId) return classSchoolPin;
+    return null;
+  }, [schoolNavId, mappableSchools, classSchoolPin]);
+
+  const focusedSchoolIndex = useMemo(() => {
+    if (!activeSchoolPin) return -1;
+    return mappableSchools.findIndex((school) => school.id === activeSchoolPin.id);
+  }, [mappableSchools, activeSchoolPin]);
+
+  const isHomeSchool = useCallback(
+    (school) => {
+      if (!classSchoolPin || !school) return false;
+      return (
+        school.id === classSchoolPin.id ||
+        schoolLabelsMatch(school.name, classSchoolPin.name) ||
+        schoolLabelsMatch(school.dataLabel, classSchoolPin.name)
+      );
+    },
+    [classSchoolPin]
+  );
   // Start each class in the reference city nearest its assigned school. Teachers can still switch
   // cities manually afterward; this only reruns when the class-school assignment changes.
   useEffect(() => {
-    if (!activeSchoolPin) return;
+    const anchor = classSchoolPin || mappableSchools[0];
+    if (!anchor) return;
     const nearestCity = PRESET_CITIES.reduce((nearest, city) => {
-      const distance = ((city.lat - activeSchoolPin.lat) ** 2) + ((city.lng - activeSchoolPin.lng) ** 2);
+      const distance = ((city.lat - anchor.lat) ** 2) + ((city.lng - anchor.lng) ** 2);
       const nearestDistance =
-        ((nearest.lat - activeSchoolPin.lat) ** 2) + ((nearest.lng - activeSchoolPin.lng) ** 2);
+        ((nearest.lat - anchor.lat) ** 2) + ((nearest.lng - anchor.lng) ** 2);
       return distance < nearestDistance ? city : nearest;
     }, PRESET_CITIES[0]);
     setSelectedCityId(nearestCity.id);
-  }, [activeSchoolPin]);
+  }, [classSchoolPin, mappableSchools]);
 
   useEffect(() => {
     if (!showHeatmap) {
@@ -291,29 +400,17 @@ const HeatMapDashboard = ({
   );
 
   const importedPoints = useMemo(() => {
-    const filtered = importedMeasurements.filter((row) => {
-      if (!softEq(filters.instructor, row.instructor)) return false;
-      if (!softEq(filters.period, row.period)) return false;
-      if (!softEq(filters.group, row.group)) return false;
-      return true;
-    });
-    const mapped = filtered.map(rowToMapPoint).filter(isGeotaggedPoint);
-    if (mapped.length) return mapped;
-    // Profile filters matched nothing — still show geotagged cache (same fallback as Analysis).
+    // Heatmap / date-range chips should include every geotagged CSV row (e.g. Vietnam + NYC).
+    // Class hierarchy filters belong on trails, not the city heatmap layer.
     return importedMeasurements.map(rowToMapPoint).filter(isGeotaggedPoint);
-  }, [
-    importedMeasurements,
-    filters.instructor,
-    filters.period,
-    filters.group,
-    softEq,
-    rowToMapPoint,
-    isGeotaggedPoint,
-  ]);
+  }, [importedMeasurements, rowToMapPoint, isGeotaggedPoint]);
 
   // Trails always come from Raw Data geotagged rows. Scope matches Raw Data tabs:
-  // Team = current team only; Class = all teams in the period; School = all teams in the school.
+  // Group / Class / School show trails only after a school is explicitly selected;
+  // World (and unscoped Group/Class/School) is overview pins only.
   const trailScopedPoints = useMemo(() => {
+    if (trailScope === 'world' || !hasSchoolSelection || !activeSchoolPin) return [];
+
     const toTrailPoint = (row) => {
       const base = rowToMapPoint(row);
       return {
@@ -325,23 +422,30 @@ const HeatMapDashboard = ({
         school: base.school || 'Unknown school',
         instructor: base.instructor,
         period: base.period,
-        group: base.group || 'Team',
+        group: base.group || 'Group',
       };
     };
 
+    const matchesFocusedSchool = (row) => {
+      const rowSchool = String(row.school ?? '').trim();
+      if (!rowSchool) return true;
+      return (
+        schoolLabelsMatch(rowSchool, activeSchoolPin.dataLabel) ||
+        schoolLabelsMatch(rowSchool, activeSchoolPin.name)
+      );
+    };
+
     const matchesScope = (row) => {
+      if (!matchesFocusedSchool(row)) return false;
       if (workspaceKind === 'public') return true;
-      // Skip school-name equality (code vs display name). Pin proximity still focuses the map.
       if (trailScope === 'school') return true;
       if (!softEq(filters.instructor, row.instructor)) return false;
       if (!softEq(filters.period, row.period)) return false;
-      if (trailScope === 'team' && !softEq(filters.group, row.group)) return false;
+      if (trailScope === 'group' && !softEq(filters.group, row.group)) return false;
       return true;
     };
 
-    const scoped = importedMeasurements.filter(matchesScope).map(toTrailPoint).filter(isGeotaggedPoint);
-    if (scoped.length) return scoped;
-    return importedMeasurements.map(toTrailPoint).filter(isGeotaggedPoint);
+    return importedMeasurements.filter(matchesScope).map(toTrailPoint).filter(isGeotaggedPoint);
   }, [
     importedMeasurements,
     filters.instructor,
@@ -352,18 +456,27 @@ const HeatMapDashboard = ({
     softEq,
     rowToMapPoint,
     isGeotaggedPoint,
+    activeSchoolPin,
+    hasSchoolSelection,
   ]);
 
+  // Soft near-school bias when focused; never fall back to distant campuses.
   const trailPointsForMap = useMemo(
-    () => preferPointsNearSchool(trailScopedPoints, activeSchoolPin),
-    [trailScopedPoints, activeSchoolPin]
+    () =>
+      preferPointsNearSchool(
+        trailScopedPoints,
+        hasSchoolSelection ? activeSchoolPin : null,
+        undefined,
+        { fallbackToAll: false }
+      ),
+    [trailScopedPoints, hasSchoolSelection, activeSchoolPin]
   );
 
   /**
-   * Walk segments + static GPS markers per team. Session/gap splitting prevents Philly↔NYC
-   * flight paths; markers cover sessions that only logged one coordinate.
+   * Walk segments + static GPS markers per group. Hidden until a school is selected.
    */
   const { trailPaths, trailMarkers } = useMemo(() => {
+    if (trailScope === 'world' || !hasSchoolSelection) return { trailPaths: [], trailMarkers: [] };
     const { segments, markers, colorKeyOrder } = buildTeamTrailSegments(trailPointsForMap, {
       trailScope,
     });
@@ -377,16 +490,16 @@ const HeatMapDashboard = ({
         color: colorForKey(marker.colorKey, colorKeyOrder),
       })),
     };
-  }, [trailPointsForMap, trailScope]);
+  }, [trailPointsForMap, trailScope, hasSchoolSelection]);
 
   const trailLegendItems = useMemo(() => {
-    // One legend row per color bucket (period / class / team), not per individual group path.
+    if (trailScope === 'world' || !hasSchoolSelection) return [];
     const seen = new Map();
     [...trailPaths, ...trailMarkers].forEach((t) => {
       if (!seen.has(t.colorKey)) seen.set(t.colorKey, { label: t.label, color: t.color });
     });
     return [...seen.values()];
-  }, [trailPaths, trailMarkers]);
+  }, [trailPaths, trailMarkers, trailScope, hasSchoolSelection]);
 
   // Filter imported locations based on selected time range
   const filteredLocations = useMemo(() => {
@@ -450,10 +563,11 @@ const HeatMapDashboard = ({
   }, [filteredLocations]);
 
   const usingOpenAQHeatmap = Boolean(openaqHeatmap?.points?.length);
+  const usingClassHeatmap = filteredLocations.length > 0;
 
-  // Heatmap points are OpenAQ (preferred) or WAQI fallback. Student measurements stay as trails.
+  // Heatmap = OpenAQ/WAQI city reference + geotagged Raw Data (CSV / class uploads).
   const locations = useMemo(() => {
-    return (openaqHeatmap?.points || []).map((point, index) => {
+    const openaq = (openaqHeatmap?.points || []).map((point, index) => {
       const value = Number(point.value);
       const row = {
         id: `openaq-${index}`,
@@ -464,11 +578,24 @@ const HeatMapDashboard = ({
         co: 0,
         temp: 0,
         humidity: 0,
+        source: 'reference',
       };
       row[selectedMetric] = Number.isFinite(value) ? value : 0;
       return row;
     });
-  }, [openaqHeatmap, selectedMetric]);
+    const fromClass = filteredLocations.map((point, index) => ({
+      id: point.id || `imported-heat-${index}`,
+      name: point.name || point.school || 'Class measurement',
+      lat: point.lat,
+      lng: point.lng,
+      pm25: point.pm25,
+      co: point.co,
+      temp: point.temp,
+      humidity: point.humidity,
+      source: 'class',
+    }));
+    return [...openaq, ...fromClass];
+  }, [openaqHeatmap, selectedMetric, filteredLocations]);
 
   // Calculate Averages for Sidebar
   const filteredImported = useMemo(() => {
@@ -507,7 +634,7 @@ const HeatMapDashboard = ({
     // School/group cards should always come from your class CSV/workspace records, never OpenAQ city feed.
     const sourceForSchoolAndGroup = filteredImported;
 
-    // School / team cards: skip hard school-name match (CSV codes vs directory names).
+    // School / group cards: skip hard school-name match (CSV codes vs directory names).
     // Fall back to the full imported pool when profile filters match nothing.
     const schoolData = sourceForSchoolAndGroup.filter((item) => softEq(filters.school, item.school));
     const schoolPool = schoolData.length ? schoolData : sourceForSchoolAndGroup;
@@ -515,7 +642,7 @@ const HeatMapDashboard = ({
       ? Math.round(schoolPool.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / schoolPool.length)
       : null;
 
-    // Team Average — when Group isn't set (common for teachers), average all teams in the
+    // Group Average — when Group isn't set (common for teachers), average all groups in the
     // current instructor / period focus instead of showing a blank dash.
     const groupData = sourceForSchoolAndGroup.filter((item) => {
       if (!softEq(filters.instructor, item.instructor)) return false;
@@ -651,9 +778,77 @@ const HeatMapDashboard = ({
     },
   }), []);
 
+  const fitAllSchools = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map || mappableSchools.length === 0) return;
+    if (mappableSchools.length === 1) {
+      map.flyTo?.({
+        center: [mappableSchools[0].lng, mappableSchools[0].lat],
+        zoom: SCHOOL_FOCUS_ZOOM,
+        duration: 900,
+      });
+      return;
+    }
+    const lngs = mappableSchools.map((s) => s.lng);
+    const lats = mappableSchools.map((s) => s.lat);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const padLng = Math.max((maxLng - minLng) * 0.15, 0.5);
+    const padLat = Math.max((maxLat - minLat) * 0.15, 0.5);
+    if (typeof map.fitBounds === 'function') {
+      map.fitBounds(
+        [
+          [minLng - padLng, minLat - padLat],
+          [maxLng + padLng, maxLat + padLat],
+        ],
+        { padding: 56, duration: 900, maxZoom: WORLD_FIT_MAX_ZOOM }
+      );
+    }
+  }, [mappableSchools]);
+
   useEffect(() => {
     if (!isLoaded || !mapInstanceRef.current) return;
+    if (suppressAutoFitRef.current) {
+      suppressAutoFitRef.current = false;
+      return;
+    }
     const map = mapInstanceRef.current;
+    // Heatmap on: frame OpenAQ + class CSV points together (e.g. NYC reference + Vietnam upload).
+    if (showHeatmap && locations.length > 0 && typeof map.fitBounds === 'function') {
+      const lngs = locations.map((loc) => Number(loc.lng)).filter(Number.isFinite);
+      const lats = locations.map((loc) => Number(loc.lat)).filter(Number.isFinite);
+      if (lngs.length && lats.length) {
+        const minLng = Math.min(...lngs);
+        const maxLng = Math.max(...lngs);
+        const minLat = Math.min(...lats);
+        const maxLat = Math.max(...lats);
+        const span = Math.max(maxLng - minLng, maxLat - minLat);
+        const padLng = Math.max((maxLng - minLng) * 0.2, span > 5 ? 2 : 0.02);
+        const padLat = Math.max((maxLat - minLat) * 0.2, span > 5 ? 2 : 0.02);
+        map.fitBounds(
+          [
+            [minLng - padLng, minLat - padLat],
+            [maxLng + padLng, maxLat + padLat],
+          ],
+          { padding: 56, duration: 800, maxZoom: span > 5 ? 4 : 12 }
+        );
+        return;
+      }
+    }
+    if (browsingWorld || !hasSchoolSelection) {
+      fitAllSchools();
+      return;
+    }
+    if (activeSchoolPin && !showHeatmap) {
+      map.flyTo?.({
+        center: [activeSchoolPin.lng, activeSchoolPin.lat],
+        zoom: SCHOOL_FOCUS_ZOOM,
+        duration: 700,
+      });
+      return;
+    }
     const coords = [
       ...trailPaths.flatMap((trail) => trail.path.map((point) => [point.lng, point.lat])),
       ...trailMarkers.map((marker) => [marker.lng, marker.lat]),
@@ -665,7 +860,6 @@ const HeatMapDashboard = ({
       const maxLng = Math.max(...lngs);
       const minLat = Math.min(...lats);
       const maxLat = Math.max(...lats);
-      // Small campus padding — the old 0.01° floor zoomed out to ~neighborhood scale.
       const padLng = Math.max((maxLng - minLng) * 0.2, 0.0015);
       const padLat = Math.max((maxLat - minLat) * 0.2, 0.0015);
       if (typeof map.fitBounds === 'function') {
@@ -676,8 +870,6 @@ const HeatMapDashboard = ({
           ],
           { padding: 48, duration: 700, maxZoom: 17 }
         );
-      } else {
-        map.flyTo?.({ center: [mapCenter.lng, mapCenter.lat], zoom: DEFAULT_MAP_ZOOM, duration: 700 });
       }
       return;
     }
@@ -687,20 +879,91 @@ const HeatMapDashboard = ({
     }
     map.flyTo?.({
       center: [mapCenter.lng, mapCenter.lat],
-      zoom: showHeatmap ? 12 : (activeSchoolPin ? SCHOOL_FOCUS_ZOOM : DEFAULT_MAP_ZOOM),
+      zoom: showHeatmap ? 12 : DEFAULT_MAP_ZOOM,
       duration: 700,
     });
-  }, [isLoaded, showHeatmap, mapCenter.lat, mapCenter.lng, trailPaths, trailMarkers, activeSchoolPin]);
+  }, [
+    isLoaded,
+    showHeatmap,
+    mapCenter.lat,
+    mapCenter.lng,
+    trailPaths,
+    trailMarkers,
+    activeSchoolPin,
+    browsingWorld,
+    hasSchoolSelection,
+    fitAllSchools,
+    locations,
+  ]);
 
-  const focusSchool = useCallback(() => {
-    if (!activeSchoolPin) return;
-    mapInstanceRef.current?.flyTo({
-      center: [activeSchoolPin.lng, activeSchoolPin.lat],
-      zoom: SCHOOL_FOCUS_ZOOM,
-      duration: 900,
-    });
+  const selectMapScope = useCallback(
+    (scopeId) => {
+      if (scopeId === 'world') {
+        suppressAutoFitRef.current = true;
+        setTrailScope('world');
+        setSchoolNavId(null);
+        setSchoolPinOpen(false);
+        requestAnimationFrame(() => fitAllSchools());
+        return;
+      }
+      // Group / Class / School: change compare mode only. Do not invent a school selection.
+      setTrailScope(scopeId);
+      if (!schoolNavId) {
+        setSchoolPinOpen(false);
+        suppressAutoFitRef.current = true;
+        requestAnimationFrame(() => fitAllSchools());
+      }
+    },
+    [fitAllSchools, schoolNavId]
+  );
+
+  const selectSchoolPin = useCallback((school) => {
+    if (!school) return;
+    suppressAutoFitRef.current = true;
+    setTrailScope((prev) => (prev === 'world' ? 'school' : prev));
+    setSchoolNavId(school.id);
     setSchoolPinOpen(true);
-  }, [activeSchoolPin]);
+    mapInstanceRef.current?.flyTo({
+      center: [school.lng, school.lat],
+      zoom: SCHOOL_FOCUS_ZOOM,
+      duration: 700,
+    });
+  }, []);
+
+  const goToSchoolAtIndex = useCallback(
+    (index) => {
+      if (!mappableSchools.length) return;
+      const wrapped = ((index % mappableSchools.length) + mappableSchools.length) % mappableSchools.length;
+      selectSchoolPin(mappableSchools[wrapped]);
+      setTrailScope('school');
+    },
+    [mappableSchools, selectSchoolPin]
+  );
+
+  const goToPrevSchool = useCallback(() => {
+    const start = focusedSchoolIndex >= 0 ? focusedSchoolIndex : 0;
+    goToSchoolAtIndex(start - 1);
+  }, [focusedSchoolIndex, goToSchoolAtIndex]);
+
+  const goToNextSchool = useCallback(() => {
+    const start = focusedSchoolIndex >= 0 ? focusedSchoolIndex : -1;
+    goToSchoolAtIndex(start + 1);
+  }, [focusedSchoolIndex, goToSchoolAtIndex]);
+
+  /** Always jump to the instructor/class assigned school (starred home campus). */
+  const goToHomeSchool = useCallback(() => {
+    if (!classSchoolPin) return;
+    const pin =
+      mappableSchools.find((school) => school.id === classSchoolPin.id) ||
+      mappableSchools.find(
+        (school) =>
+          schoolLabelsMatch(school.name, classSchoolPin.name) ||
+          schoolLabelsMatch(school.dataLabel, classSchoolPin.name)
+      ) ||
+      classSchoolPin;
+    setTrailScope('school');
+    selectSchoolPin(pin);
+  }, [classSchoolPin, mappableSchools, selectSchoolPin]);
 
   const focusMyLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -885,7 +1148,7 @@ const HeatMapDashboard = ({
 
       ctx.fillStyle = '#6b7280';
       ctx.font = '16px Arial, sans-serif';
-      ctx.fillText('Team:', 30, valueY);
+      ctx.fillText('Group:', 30, valueY);
       ctx.fillStyle = '#1f2937';
       ctx.font = 'bold 18px Arial, sans-serif';
       ctx.fillText(`${schoolInfo} - ${classInfo} - ${periodInfo} - ${groupInfo}`, 100, valueY);
@@ -934,7 +1197,9 @@ const HeatMapDashboard = ({
             <p className="truncate text-[10px] text-gray-500">
               {showHeatmap
                 ? `${selectedCity.city} · ${openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} reference`
-                : `Team trails · ${trailScope} · ${dateRangeLabel}`}
+                : browsingWorld || !hasSchoolSelection
+                  ? `${browsingWorld ? 'World' : 'Schools'} · ${mappableSchools.length} with data · click a campus for trails`
+                  : `Group trails · ${trailScope} · ${dateRangeLabel}`}
             </p>
           </div>
           <div className="hidden h-7 w-px bg-gray-200 sm:block" />
@@ -963,15 +1228,16 @@ const HeatMapDashboard = ({
             aria-label="Trail compare scope"
           >
             {[
-              { id: 'team', label: 'Team' },
+              { id: 'group', label: 'Group' },
               { id: 'class', label: 'Class' },
               { id: 'school', label: 'School' },
+              { id: 'world', label: 'World' },
             ].map((scope) => (
               <button
                 key={scope.id}
                 type="button"
                 aria-pressed={trailScope === scope.id}
-                onClick={() => setTrailScope(scope.id)}
+                onClick={() => selectMapScope(scope.id)}
                 className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${
                   trailScope === scope.id
                     ? 'bg-white text-gray-900 shadow-sm'
@@ -1054,10 +1320,18 @@ const HeatMapDashboard = ({
         <div className="h-full">
           {/* Map */}
           <div className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white">
-            {showHeatmap && usingOpenAQHeatmap && (
+            {showHeatmap && (usingOpenAQHeatmap || usingClassHeatmap) && (
               <p className="absolute left-4 top-20 z-20 max-w-sm rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-emerald-700 shadow">
                 Visualization source:{' '}
-                {openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} sensors near {selectedCity.city}.
+                {[
+                  usingOpenAQHeatmap
+                    ? `${openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} near ${selectedCity.city}`
+                    : null,
+                  usingClassHeatmap ? 'your Raw Data measurements' : null,
+                ]
+                  .filter(Boolean)
+                  .join(' + ')}
+                .
               </p>
             )}
 
@@ -1116,25 +1390,51 @@ const HeatMapDashboard = ({
                   </Marker>
                 )}
 
-                {activeSchoolPin && (
-                  <Marker
-                    longitude={activeSchoolPin.lng}
-                    latitude={activeSchoolPin.lat}
-                    anchor="bottom"
-                  >
-                    <button
-                      type="button"
-                      title={activeSchoolPin.name}
-                      aria-label={`Show ${activeSchoolPin.name}`}
-                      onClick={() => setSchoolPinOpen(true)}
-                      className="flex h-9 min-w-9 items-center justify-center rounded-full border-2 border-white bg-blue-600 px-2 text-[10px] font-bold text-white shadow-lg"
+                {mappableSchools.map((school) => {
+                  const isFocused = hasSchoolSelection && activeSchoolPin?.id === school.id;
+                  const home = isHomeSchool(school);
+                  return (
+                    <Marker
+                      key={school.id}
+                      longitude={school.lng}
+                      latitude={school.lat}
+                      anchor="bottom"
                     >
-                      {activeSchoolPin.shortLabel}
-                    </button>
-                  </Marker>
-                )}
+                      <button
+                        type="button"
+                        title={school.name}
+                        aria-label={`Show ${school.name}`}
+                        data-testid={`school-pin-${school.id}`}
+                        aria-pressed={isFocused}
+                        onClick={() => selectSchoolPin(school)}
+                        className={`relative flex flex-col items-center ${
+                          isFocused ? 'z-10' : 'opacity-90'
+                        }`}
+                      >
+                        {home && (
+                          <span
+                            className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow"
+                            title="Your school"
+                            aria-hidden="true"
+                          >
+                            <Star className="h-2.5 w-2.5 fill-current" />
+                          </span>
+                        )}
+                        <span
+                          className={`flex h-8 min-w-8 items-center justify-center rounded-full border-2 px-2 text-[10px] font-bold text-white shadow-lg ${
+                            home ? 'border-amber-300' : 'border-white'
+                          } ${
+                            isFocused ? 'bg-blue-600 scale-110' : home ? 'bg-blue-700' : 'bg-slate-600'
+                          }`}
+                        >
+                          {school.shortLabel}
+                        </span>
+                      </button>
+                    </Marker>
+                  );
+                })}
 
-                {activeSchoolPin && schoolPinOpen && (
+                {hasSchoolSelection && activeSchoolPin && schoolPinOpen && (
                   <Popup
                     longitude={activeSchoolPin.lng}
                     latitude={activeSchoolPin.lat}
@@ -1143,29 +1443,66 @@ const HeatMapDashboard = ({
                     closeOnClick={false}
                     onClose={() => setSchoolPinOpen(false)}
                   >
-                    <div className="max-w-[240px] pr-1">
+                    <div className="max-w-[260px] pr-1">
                       <p className="text-sm font-bold leading-snug text-gray-900">
                         {activeSchoolPin.name}
                       </p>
-                      <p className="mt-1 text-xs text-gray-600">{activeSchoolPin.address}</p>
-                      <p className="mt-2 text-[10px] text-gray-500">
-                        {filters.school ? 'Your class\'s school' : 'Program pin (no school assigned yet)'}
-                      </p>
+                      {isHomeSchool(activeSchoolPin) && (
+                        <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+                          Your school
+                        </p>
+                      )}
+                      {typeof onOpenRawData === 'function' && (
+                        <button
+                          type="button"
+                          className="mt-2 w-full rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                          onClick={() => {
+                            onOpenRawData({
+                              schoolName: activeSchoolPin.name,
+                              schoolDataLabel: activeSchoolPin.dataLabel || activeSchoolPin.name,
+                            });
+                          }}
+                        >
+                          Raw Data
+                        </button>
+                      )}
                     </div>
                   </Popup>
                 )}
               </MapView>
 
-              {activeSchoolPin && (
-                <button
-                  type="button"
-                  title="Go to your school"
-                  aria-label="Center map on your school"
-                  onClick={focusSchool}
-                  className="absolute right-12 top-2.5 z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50"
-                >
-                  <GraduationCap className="h-5 w-5" />
-                </button>
+              {mappableSchools.length > 0 && (
+                <div className="absolute right-12 top-2.5 z-10 flex items-center gap-1 rounded bg-white p-0.5 shadow-md">
+                  <button
+                    type="button"
+                    title="Previous school"
+                    aria-label="Previous school"
+                    onClick={goToPrevSchool}
+                    className="flex h-7 w-7 items-center justify-center rounded text-gray-700 hover:bg-gray-50"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Next school"
+                    aria-label="Next school"
+                    onClick={goToNextSchool}
+                    className="flex h-7 w-7 items-center justify-center rounded text-gray-700 hover:bg-gray-50"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                  {classSchoolPin && (
+                    <button
+                      type="button"
+                      title={`Go to your school (${classSchoolPin.name})`}
+                      aria-label="Center map on your school"
+                      onClick={goToHomeSchool}
+                      className="flex h-7 w-7 items-center justify-center rounded text-amber-600 hover:bg-amber-50"
+                    >
+                      <GraduationCap className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               )}
               <button
                 type="button"
@@ -1173,7 +1510,9 @@ const HeatMapDashboard = ({
                 aria-label={isLocating ? 'Finding your location' : 'Center map on your location'}
                 onClick={focusMyLocation}
                 disabled={isLocating}
-                className="absolute right-[5.5rem] top-2.5 z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50 disabled:cursor-wait disabled:text-sky-500"
+                className={`absolute z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50 disabled:cursor-wait disabled:text-sky-500 ${
+                  mappableSchools.length > 0 ? 'right-12 top-12' : 'right-[5.5rem] top-2.5'
+                }`}
               >
                 <LocateFixed className={`h-5 w-5 ${isLocating ? 'animate-pulse' : ''}`} />
               </button>
@@ -1205,11 +1544,11 @@ const HeatMapDashboard = ({
               {showHeatmap && isLoaded && openaqStatus !== 'loading' && heatmapData.features.length === 0 && (
                 <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2">
                   <div className="rounded-xl border border-amber-200 bg-white px-6 py-4 shadow-lg">
-                    <p className="text-center text-sm font-bold text-gray-800">No reference sensor data</p>
+                    <p className="text-center text-sm font-bold text-gray-800">No heatmap data</p>
                     <p className="mt-1 text-center text-xs text-gray-500">
                       {openaqStatus === 'error'
-                        ? 'The reference service could not be reached. Student trails are still available.'
-                        : `No ${metricThemes[selectedMetric].label} readings were found near ${selectedCity.label}.`}
+                        ? 'Reference sensors could not be reached, and there are no geotagged Raw Data points yet.'
+                        : `No ${metricThemes[selectedMetric].label} readings near ${selectedCity.label}, and no geotagged class measurements to show.`}
                     </p>
                   </div>
                 </div>
@@ -1231,7 +1570,7 @@ const HeatMapDashboard = ({
                 </div>
               )}
 
-              {/* Trail legend — one color per team within the selected Team/Class/School scope */}
+              {/* Trail legend — one color per group within the selected Group/Class/School scope */}
               {trailLegendItems.length > 0 && (
                 <div className={`absolute left-3 z-10 max-w-[220px] rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg ${
                   showHeatmap && heatmapData.features.length > 0
@@ -1239,11 +1578,11 @@ const HeatMapDashboard = ({
                     : 'bottom-3 sm:bottom-4 sm:left-4'
                 }`}>
                   <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {trailScope === 'team'
-                      ? 'Team trail'
+                    {trailScope === 'group'
+                      ? 'Group trail'
                       : trailScope === 'class'
-                        ? 'Class trails · by period'
-                        : 'School trails · by class'}
+                        ? 'Class trails · by group'
+                        : 'School trails · by group'}
                   </p>
                   <div className="space-y-1 max-h-28 overflow-y-auto">
                     {trailLegendItems.map((item) => (
@@ -1254,7 +1593,7 @@ const HeatMapDashboard = ({
                     ))}
                   </div>
                   <p className="mt-2 text-[10px] leading-snug text-gray-500">
-                    Lines connect each team&apos;s geotagged spots in time order for the same day.
+                    Lines connect each group&apos;s geotagged spots in time order for the same day.
                     {trailMarkers.length > 0 ? ' Dots are single-fix days.' : ''}
                   </p>
                 </div>
@@ -1292,7 +1631,11 @@ const HeatMapDashboard = ({
 
             <div className="min-w-[145px] rounded-lg border border-blue-100 bg-white px-3 py-2 shadow-lg">
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">School Avg</p>
-              <p className="text-[10px] text-blue-500 font-bold uppercase truncate">{filters.school || '—'}</p>
+              <p className="text-[10px] text-blue-500 font-bold uppercase truncate">
+                {browsingWorld || !hasSchoolSelection
+                  ? (browsingWorld ? 'World' : 'All schools')
+                  : (activeSchoolPin?.name || filters.school || '—')}
+              </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-lg font-bold text-blue-600">{stats.school ?? '—'}</span>
                 {stats.school != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
@@ -1300,9 +1643,9 @@ const HeatMapDashboard = ({
             </div>
 
             <div className="min-w-[145px] rounded-lg border border-indigo-100 bg-white px-3 py-2 shadow-lg">
-              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Team Avg</p>
+              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Group Avg</p>
               <p className="text-[10px] text-indigo-500 font-bold uppercase truncate">
-                {filters.group ? `Team ${filters.group}` : 'All teams'}
+                {filters.group ? `Group ${filters.group}` : 'All groups'}
               </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-lg font-bold text-indigo-600">{stats.group ?? '—'}</span>
@@ -1348,7 +1691,7 @@ const HeatMapDashboard = ({
             {[
               ...(showHeatmap ? [['City', stats.city, theme.primary]] : []),
               ['School', stats.school, '#2563EB'],
-              ['Team', stats.group, '#4F46E5'],
+              ['Group', stats.group, '#4F46E5'],
             ].map(([label, value, color]) => (
               <div key={label} className="rounded-lg border bg-white px-2 py-1 shadow">
                 <span className="mr-1 text-[9px] font-bold uppercase text-gray-500">{label}</span>

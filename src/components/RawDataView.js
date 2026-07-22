@@ -5,6 +5,7 @@ import {
   clearImportedMeasurements,
   getImportedMeasurements,
   isLocalImportCache,
+  mergeImportedMeasurementRows,
   parseImportedCsv,
   parseImportedCsvRaw,
   setImportedMeasurements,
@@ -19,6 +20,7 @@ import {
   SENSOR_CSV_EXPORT_HEADERS,
   csvEscapeCell,
 } from '../constants/sensorCsv';
+import { schoolLabelsMatch as softSchoolMatch } from '../utils/schoolLabels';
 
 const CSV_UPLOAD_CHUNK_SIZE = 2500;
 
@@ -64,6 +66,8 @@ const RawDataView = ({
   importedDataVersion = 0,
   isReadOnly = false, // true for the aggregate Public / school workspaces (server already scopes rows)
   userRole = 'student',
+  /** When set (Heat Map → Raw Data), land on School scope filtered to this campus. */
+  schoolFocus = null,
 }) => {
   const isTeacher = userRole === 'teacher';
   const [rawData, setRawData] = useState(() => getImportedMeasurements());
@@ -107,6 +111,10 @@ const RawDataView = ({
   // Group/Class must actually filter: an empty scopeGroup used to short-circuit as "match all"
   // while the <select> still *displayed* the first option (looked filtered, wasn't).
   const rowInScope = (row) => {
+    // Heat Map "Raw Data" button: show only that campus's rows.
+    if (schoolFocus && !softSchoolMatch(row.school, schoolFocus) && !softSchoolMatch(row.school, filters.school)) {
+      return false;
+    }
     if (isReadOnly || scopeTab === 'school') return true;
     const rowClassKey = ck(normHierarchy(row.instructor), normHierarchy(row.period));
     const classMatch =
@@ -168,7 +176,7 @@ const RawDataView = ({
   const itemsPerPage = 50;
   const importGenerationRef = useRef(0);
 
-  const loadFromBackend = useCallback(async ({ force = false } = {}) => {
+  const loadFromBackend = useCallback(async ({ force = false, preserveLocal = false } = {}) => {
     if (!workspaceId) return;
     const genAtStart = importGenerationRef.current;
     const cached = getImportedMeasurements();
@@ -187,10 +195,20 @@ const RawDataView = ({
       if (genAtStart !== importGenerationRef.current) return;
       const mapped = workspaceMeasurementsToDisplayRows(result.measurements || []);
       if (mapped.length) {
-        setRawData(mapped);
+        // After CSV import, union with the browser cache so a scoped/lagging API read cannot
+        // drop rows that were just shown (e.g. a Vietnam upload vanishing while NYC remains).
+        const next =
+          preserveLocal && cached.length
+            ? mergeImportedMeasurementRows(mapped, cached)
+            : mapped;
+        setRawData(next);
         setHasEngaged(true);
-        setImportedMeasurements(mapped, { source: 'server' });
+        setImportedMeasurements(next, { source: 'server' });
         onImportedDataChanged?.();
+      } else if (preserveLocal && cached.length) {
+        setRawData(cached);
+        setHasEngaged(true);
+        setImportedMeasurements(cached, { source: 'local-import' });
       }
     } catch {
       // Fall back to imported CSV data when backend is unavailable.
@@ -222,6 +240,14 @@ const RawDataView = ({
     setSelectedGroup(filters.group || '');
   }, [filters.school, filters.instructor, filters.period, filters.group]);
 
+  // Heat Map campus button → School scope, already engaged on that school's rows.
+  useEffect(() => {
+    if (!schoolFocus) return;
+    setScopeTab('school');
+    setHasEngaged(true);
+    setCurrentPage(1);
+  }, [schoolFocus]);
+
   // Locations for the Location chip — only sessions visible in the current scope,
   // further narrowed by the DRAFT date selection (chips narrow each other live, before Apply).
   // Metrics are column toggles, not row filters, so they don't change available locations.
@@ -232,7 +258,7 @@ const RawDataView = ({
         .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
         .map((d) => d.location)
     )];
-  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity.school]);
+  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity.school, schoolFocus, filters.school]);
 
   // If the drafted location is no longer available (scope or date draft changed), deselect it.
   useEffect(() => {
@@ -550,9 +576,10 @@ const RawDataView = ({
         visibility: r.visibility || 'school',
       }));
       importGenerationRef.current += 1;
-      // Always show imported data in UI immediately; mark as local so polls cannot wipe it.
-      setRawData(imported);
-      setImportedMeasurements(imported, { source: 'local-import' });
+      // Merge into existing cache — replacing wiped NYC/etc. whenever a second CSV (e.g. Vietnam) loaded.
+      const merged = mergeImportedMeasurementRows(getImportedMeasurements(), imported);
+      setRawData(merged);
+      setImportedMeasurements(merged, { source: 'local-import' });
       onImportedDataChanged?.();
       setImportError('');
       // Historical CSVs are often hidden by date/location chips; widen filters after import.
@@ -610,9 +637,10 @@ const RawDataView = ({
             const chunk = payloadRows.slice(i, i + CSV_UPLOAD_CHUNK_SIZE);
             await importCsvMeasurements(workspaceId, chunk);
           }
-          await loadFromBackend({ force: true });
-          // Keep the import visible even if the workspace school name differs from CSV school codes.
+          // Preserve the merged browser rows if the API read is incomplete right after write.
+          await loadFromBackend({ force: true, preserveLocal: true });
           setHasEngaged(true);
+          setScopeTab('school');
         } catch (persistError) {
           setImportError(
             persistError?.message

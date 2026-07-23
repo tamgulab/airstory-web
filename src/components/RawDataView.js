@@ -1,9 +1,11 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Camera, Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, Pencil, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements, setSessionVisibility } from '../api/data';
 import {
   clearImportedMeasurements,
   getImportedMeasurements,
+  isLocalImportCache,
+  mergeImportedMeasurementRows,
   parseImportedCsv,
   parseImportedCsvRaw,
   setImportedMeasurements,
@@ -11,12 +13,14 @@ import {
   uniqueHierarchyFromImportedRows,
 } from '../utils/importedData';
 import { workspaceMeasurementsToDisplayRows } from '../utils/measurementRows';
+import { compareHierarchyToken } from '../utils/classStructure';
 import DataCalendar from './DataCalendar';
 import ConfirmDialog from './ConfirmDialog';
 import {
   SENSOR_CSV_EXPORT_HEADERS,
   csvEscapeCell,
 } from '../constants/sensorCsv';
+import { schoolLabelsMatch as softSchoolMatch } from '../utils/schoolLabels';
 
 const CSV_UPLOAD_CHUNK_SIZE = 2500;
 
@@ -31,6 +35,8 @@ const ALL_METRICS_ON = { pm25: true, co: true, temp: true, humidity: true };
 
 // A "class" is a (teacher · period) pair → this key never lets period stand alone.
 const ck = (instructor, period) => `${instructor}|${period}`;
+const normHierarchy = (value) => String(value ?? '').trim();
+const sameHierarchyToken = (a, b) => normHierarchy(a) === normHierarchy(b);
 
 // TODO(backend): the backend stores temperature in CELSIUS only. The °C/°F choice is a
 // client-side display preference — convert at render, never change stored data.
@@ -57,8 +63,13 @@ const RawDataView = ({
   theme,
   metricThemes,
   onImportedDataChanged,
+  importedDataVersion = 0,
   isReadOnly = false, // true for the aggregate Public / school workspaces (server already scopes rows)
+  userRole = 'student',
+  /** When set (Heat Map → Raw Data), land on School scope filtered to this campus. */
+  schoolFocus = null,
 }) => {
+  const isTeacher = userRole === 'teacher';
   const [rawData, setRawData] = useState(() => getImportedMeasurements());
   const [loadingBackend, setLoadingBackend] = useState(false);
   const [importError, setImportError] = useState('');
@@ -95,14 +106,26 @@ const RawDataView = ({
   // Scope predicate (used by the table AND the scope-aware Location options). In the aggregate
   // Public / school workspaces the server already returns exactly the rows the viewer may see, so
   // the Group/Class/School convenience filter is bypassed. Visibility is enforced server-side.
-  const rowInScope = (row) =>
-    isReadOnly
-      ? true
-      : scopeTab === 'school'
-        ? row.school === viewerIdentity.school
-        : scopeTab === 'class'
-          ? ck(row.instructor, row.period) === scopeClassKey
-          : ck(row.instructor, row.period) === scopeClassKey && row.group === scopeGroup;
+  // School tab shows the full workspace table — exact school-name match was hiding CSV school codes
+  // (e.g. LINCOLN vs "Abraham Lincoln High School") and looked like a data wipe.
+  // Group/Class must actually filter: an empty scopeGroup used to short-circuit as "match all"
+  // while the <select> still *displayed* the first option (looked filtered, wasn't).
+  const rowInScope = (row) => {
+    // Heat Map "Raw Data" button: show only that campus's rows.
+    if (schoolFocus && !softSchoolMatch(row.school, schoolFocus) && !softSchoolMatch(row.school, filters.school)) {
+      return false;
+    }
+    if (isReadOnly || scopeTab === 'school') return true;
+    const rowClassKey = ck(normHierarchy(row.instructor), normHierarchy(row.period));
+    const classMatch =
+      !scopeClassKey ||
+      rowClassKey === scopeClassKey ||
+      ck(row.instructor, row.period) === scopeClassKey;
+    if (scopeTab === 'class') return classMatch;
+    if (!classMatch) return false;
+    if (!normHierarchy(scopeGroup)) return false;
+    return sameHierarchyToken(row.group, scopeGroup);
+  };
 
   // Toolbar: draft values (bound to inputs) vs applied values (used by the table).
   // Search/date/location/metrics only take effect on [Apply]. Scope tabs are immediate.
@@ -116,8 +139,9 @@ const RawDataView = ({
   // Shared confirmation for any destructive action: { variant, title, message, confirmLabel, onConfirm } | null
   const [confirmState, setConfirmState] = useState(null);
   const [visibilityMenu, setVisibilityMenu] = useState(null); // rowId whose visibility menu is open
-  // Empty-by-default: no sessions shown until the student engages (picks a scope tab/selector or applies filters).
-  const [hasEngaged, setHasEngaged] = useState(false);
+  // Empty-by-default until engage — but if the cache already has rows (import / prior hydrate),
+  // show them immediately. Remounting used to reset this to false and look like a wipe.
+  const [hasEngaged, setHasEngaged] = useState(() => getImportedMeasurements().length > 0);
 
   // Display preferences — view-only, this session (in-memory). Data underneath is unchanged.
   // TODO(persist): a saved user preference would attach to the user profile (or localStorage);
@@ -152,18 +176,39 @@ const RawDataView = ({
   const itemsPerPage = 50;
   const importGenerationRef = useRef(0);
 
-  const loadFromBackend = useCallback(async () => {
+  const loadFromBackend = useCallback(async ({ force = false, preserveLocal = false } = {}) => {
     if (!workspaceId) return;
     const genAtStart = importGenerationRef.current;
+    const cached = getImportedMeasurements();
+    // Keep whatever is already on screen (CSV import or prior hydrate). Only a forced refresh
+    // after a successful CSV persist may replace it — automatic remount reloads were wiping UI.
+    if (!force && (isLocalImportCache() || cached.length > 0)) {
+      if (cached.length) {
+        setRawData(cached);
+        setHasEngaged(true);
+      }
+      return;
+    }
     setLoadingBackend(true);
     try {
       const result = await getMeasurements(workspaceId, { limit: 10000 });
       if (genAtStart !== importGenerationRef.current) return;
       const mapped = workspaceMeasurementsToDisplayRows(result.measurements || []);
       if (mapped.length) {
-        setRawData(mapped);
-        setImportedMeasurements(mapped);
+        // After CSV import, union with the browser cache so a scoped/lagging API read cannot
+        // drop rows that were just shown (e.g. a Vietnam upload vanishing while NYC remains).
+        const next =
+          preserveLocal && cached.length
+            ? mergeImportedMeasurementRows(mapped, cached)
+            : mapped;
+        setRawData(next);
+        setHasEngaged(true);
+        setImportedMeasurements(next, { source: 'server' });
         onImportedDataChanged?.();
+      } else if (preserveLocal && cached.length) {
+        setRawData(cached);
+        setHasEngaged(true);
+        setImportedMeasurements(cached, { source: 'local-import' });
       }
     } catch {
       // Fall back to imported CSV data when backend is unavailable.
@@ -178,6 +223,16 @@ const RawDataView = ({
     loadFromBackend();
   }, [loadFromBackend]);
 
+  // Stay in sync with App's measurement cache, but never replace a full table with an empty cache
+  // (that was the "data disappears after half a minute" bug).
+  useEffect(() => {
+    const cached = getImportedMeasurements();
+    if (cached.length) {
+      setRawData(cached);
+      setHasEngaged(true);
+    }
+  }, [importedDataVersion]);
+
   React.useEffect(() => {
     setSelectedSchool(filters.school || '');
     setSelectedInstructor(filters.instructor || '');
@@ -185,25 +240,25 @@ const RawDataView = ({
     setSelectedGroup(filters.group || '');
   }, [filters.school, filters.instructor, filters.period, filters.group]);
 
+  // Heat Map campus button → School scope, already engaged on that school's rows.
+  useEffect(() => {
+    if (!schoolFocus) return;
+    setScopeTab('school');
+    setHasEngaged(true);
+    setCurrentPage(1);
+  }, [schoolFocus]);
+
   // Locations for the Location chip — only sessions visible in the current scope,
   // further narrowed by the DRAFT date selection (chips narrow each other live, before Apply).
   // Metrics are column toggles, not row filters, so they don't change available locations.
   const locations = useMemo(() => {
-    const inScope = (r) =>
-      isReadOnly
-        ? true
-        : scopeTab === 'school'
-          ? r.school === viewerIdentity.school
-          : scopeTab === 'class'
-            ? ck(r.instructor, r.period) === scopeClassKey
-            : ck(r.instructor, r.period) === scopeClassKey && r.group === scopeGroup;
     return [...new Set(
       rawData
-        .filter((r) => inScope(r))
+        .filter((r) => rowInScope(r))
         .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
         .map((d) => d.location)
     )];
-  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity]);
+  }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity.school, schoolFocus, filters.school]);
 
   // If the drafted location is no longer available (scope or date draft changed), deselect it.
   useEffect(() => {
@@ -215,39 +270,98 @@ const RawDataView = ({
   // Dates that have data → drives the calendar's bold/selectable days (Section 3).
   const dataDates = new Set(rawData.map((d) => d.date));
 
-  // Class-periods (teacher · period) present in the school → drives the Class tab.
-  const schoolRows = rawData.filter((r) => r.school === viewerIdentity.school);
-  const classPeriods = [];
-  const seenClass = new Set();
-  schoolRows.forEach((r) => {
-    const key = ck(r.instructor, r.period);
-    if (r.instructor && r.period && !seenClass.has(key)) {
-      seenClass.add(key);
-      classPeriods.push({ key, label: `${r.instructor} · ${r.period}` });
-    }
-  });
-  classPeriods.sort((a, b) => a.label.localeCompare(b.label));
+  // Class-periods (teacher · period) in the workspace table → drives the Class tab.
+  // Do not require exact school-name match (CSV codes vs directory names).
+  const schoolRows = rawData;
+  const classPeriods = useMemo(() => {
+    const periods = [];
+    const seenClass = new Set();
+    rawData.forEach((r) => {
+      const key = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+      if (normHierarchy(r.instructor) && normHierarchy(r.period) && !seenClass.has(key)) {
+        seenClass.add(key);
+        periods.push({
+          key,
+          label: `${normHierarchy(r.instructor)} · ${normHierarchy(r.period)}`,
+        });
+      }
+    });
+    periods.sort((a, b) => a.label.localeCompare(b.label));
+    return periods;
+  }, [rawData]);
 
   // Groups within the currently selected class context → drives the Group tab.
-  const groupsForSelectedClass = [...new Set(
-    schoolRows.filter((r) => ck(r.instructor, r.period) === scopeClassKey).map((r) => r.group).filter(Boolean)
-  )].sort();
+  const groupsForSelectedClass = useMemo(
+    () =>
+      [...new Set(
+        rawData
+          .filter((r) => {
+            const key = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+            return !scopeClassKey || key === scopeClassKey || ck(r.instructor, r.period) === scopeClassKey;
+          })
+          .map((r) => normHierarchy(r.group))
+          .filter(Boolean)
+      )].sort(compareHierarchyToken),
+    [rawData, scopeClassKey]
+  );
 
   // The viewer's own group within a given class-period (empty if not a member).
   const viewerGroupForClass = (key) => {
-    const m = viewerIdentity.memberships.find((mm) => ck(mm.instructor, mm.period) === key);
-    return m ? m.group : '';
+    const m = viewerIdentity.memberships.find(
+      (mm) =>
+        ck(normHierarchy(mm.instructor), normHierarchy(mm.period)) === key ||
+        ck(mm.instructor, mm.period) === key
+    );
+    return m ? normHierarchy(m.group) : '';
   };
   const selectedClassLabel = classPeriods.find((c) => c.key === scopeClassKey)?.label || '';
+
+  // Keep Class/Group selects honest: if state is blank or stale, snap to a real option so the
+  // visible dropdown value matches what the table filter uses.
+  useEffect(() => {
+    if (isReadOnly || !classPeriods.length) return;
+    if (!scopeClassKey || !classPeriods.some((c) => c.key === scopeClassKey)) {
+      const own = ck(
+        normHierarchy(primaryMembership.instructor),
+        normHierarchy(primaryMembership.period)
+      );
+      const next = classPeriods.find((c) => c.key === own)?.key || classPeriods[0].key;
+      setScopeClassKey(next);
+    }
+  }, [isReadOnly, classPeriods, scopeClassKey, primaryMembership.instructor, primaryMembership.period]);
+
+  useEffect(() => {
+    if (isReadOnly || !groupsForSelectedClass.length) return;
+    if (!scopeGroup || !groupsForSelectedClass.some((g) => sameHierarchyToken(g, scopeGroup))) {
+      const ownMembership = viewerIdentity.memberships.find(
+        (mm) =>
+          ck(normHierarchy(mm.instructor), normHierarchy(mm.period)) === scopeClassKey ||
+          ck(mm.instructor, mm.period) === scopeClassKey
+      );
+      const own = ownMembership ? normHierarchy(ownMembership.group) : '';
+      const next =
+        (own && groupsForSelectedClass.find((g) => sameHierarchyToken(g, own))) ||
+        groupsForSelectedClass[0];
+      setScopeGroup(next);
+    }
+  }, [isReadOnly, groupsForSelectedClass, scopeGroup, scopeClassKey, viewerIdentity.memberships]);
 
   // Switching class context resets the Group default to follow it.
   const selectClassContext = (key) => {
     setScopeClassKey(key);
     const ownGroup = viewerGroupForClass(key);
     const groups = [...new Set(
-      schoolRows.filter((r) => ck(r.instructor, r.period) === key).map((r) => r.group).filter(Boolean)
-    )].sort();
-    setScopeGroup(ownGroup || groups[0] || '');
+      schoolRows
+        .filter((r) => {
+          const rowKey = ck(normHierarchy(r.instructor), normHierarchy(r.period));
+          return rowKey === key || ck(r.instructor, r.period) === key;
+        })
+        .map((r) => normHierarchy(r.group))
+        .filter(Boolean)
+    )].sort(compareHierarchyToken);
+    setScopeGroup(
+      (ownGroup && groups.find((g) => sameHierarchyToken(g, ownGroup))) || groups[0] || ''
+    );
     setHasEngaged(true);
   };
   
@@ -462,9 +576,10 @@ const RawDataView = ({
         visibility: r.visibility || 'school',
       }));
       importGenerationRef.current += 1;
-      // Always show imported data in UI immediately.
-      setRawData(imported);
-      setImportedMeasurements(imported);
+      // Merge into existing cache — replacing wiped NYC/etc. whenever a second CSV (e.g. Vietnam) loaded.
+      const merged = mergeImportedMeasurementRows(getImportedMeasurements(), imported);
+      setRawData(merged);
+      setImportedMeasurements(merged, { source: 'local-import' });
       onImportedDataChanged?.();
       setImportError('');
       // Historical CSVs are often hidden by date/location chips; widen filters after import.
@@ -478,11 +593,24 @@ const RawDataView = ({
       const inferred = uniqueHierarchyFromImportedRows(imported);
       setFilters((prev) => ({
         ...prev,
-        school: inferred.school,
-        instructor: inferred.instructor,
-        period: inferred.period,
-        group: inferred.group,
+        school: inferred.school || prev.school,
+        instructor: inferred.instructor || prev.instructor,
+        period: inferred.period || prev.period,
+        group: inferred.group || prev.group,
       }));
+
+      // Raw Data hides rows until the user "engages" a scope. Importing should show data immediately,
+      // and point the scope selectors at the CSV hierarchy (otherwise Group/School filters hide it).
+      setHasEngaged(true);
+      if (inferred.instructor || inferred.period) {
+        setScopeClassKey(ck(inferred.instructor, inferred.period));
+      }
+      if (inferred.group) {
+        setScopeGroup(inferred.group);
+      }
+      // Prefer School scope after import so hierarchy mismatches cannot hide the new rows.
+      setScopeTab('school');
+      if (inferred.group) setScopeGroup(inferred.group);
 
       if (workspaceId && rawRows.length) {
         const payloadRows = rawRows.map((r) => ({
@@ -502,18 +630,22 @@ const RawDataView = ({
           co: Number(r.co) || 0,
           temp: Number(r.temp) || 0,
           humidity: Number(r.humidity) || 0,
+          visibility: 'school',
         }));
         try {
           for (let i = 0; i < payloadRows.length; i += CSV_UPLOAD_CHUNK_SIZE) {
             const chunk = payloadRows.slice(i, i + CSV_UPLOAD_CHUNK_SIZE);
             await importCsvMeasurements(workspaceId, chunk);
           }
-          await loadFromBackend();
+          // Preserve the merged browser rows if the API read is incomplete right after write.
+          await loadFromBackend({ force: true, preserveLocal: true });
+          setHasEngaged(true);
+          setScopeTab('school');
         } catch (persistError) {
           setImportError(
             persistError?.message
-              ? `Imported locally, but cloud save failed: ${persistError.message}`
-              : 'Imported locally, but cloud save failed.'
+              ? `Imported in the browser, but saving to the database failed: ${persistError.message}`
+              : 'Imported in the browser, but saving to the database failed.'
           );
         }
       }
@@ -525,6 +657,10 @@ const RawDataView = ({
   };
 
   const handleClearImportedData = async () => {
+    if (!isTeacher) {
+      setImportError('Only teachers can clear class data.');
+      return;
+    }
     try {
       if (workspaceId) {
         await clearWorkspaceMeasurements(workspaceId);
@@ -749,7 +885,7 @@ const RawDataView = ({
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
           </label>
           )}
-          {!isReadOnly && (
+          {!isReadOnly && isTeacher && (
           <button
             onClick={() => setConfirmState({
               variant: 'danger',
@@ -1551,7 +1687,7 @@ const RawDataView = ({
                               {row.sessionNotes ? (
                                 <span className="inline-flex items-center gap-2">
                                   <span>{row.sessionNotes}</span>
-                                  <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">✏️</span>
+                                  <Pencil className="h-3 w-3 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                                   {isEdited(row.id, 'sessionNotes') && (
                                     <span className="text-xs text-orange-600 font-semibold">*</span>
                                   )}
@@ -1687,21 +1823,30 @@ const RawDataView = ({
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">📊 Viewing Data</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <BarChart3 className="h-4 w-4" aria-hidden="true" />
+                  Viewing Data
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• Click the <strong>chevron (▶)</strong> to expand rows and see detailed second-by-second sensor data</li>
                   <li>• Click <strong>location coordinates</strong> to open Google Maps</li>
                 </ul>
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">✏️ Editing Data</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                  Editing Data
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• <strong>Click any data value</strong> to edit it - edited values show a <span className="font-bold text-orange-600">*</span> badge</li>
                   <li>• <strong>Click notes</strong> to add context about measurement conditions</li>
                 </ul>
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900 mb-2">📷 Photos</h4>
+                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
+                  <Camera className="h-4 w-4" aria-hidden="true" />
+                  Photos
+                </h4>
                 <ul className="text-sm text-gray-700 space-y-1 ml-4">
                   <li>• <strong>Click photos</strong> in expanded rows to view full-size images</li>
                   <li>• Photos show timestamps automatically</li>

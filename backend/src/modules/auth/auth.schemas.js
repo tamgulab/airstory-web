@@ -30,11 +30,35 @@ export const registerSchema = z.object({
 // loginSchema / changePasswordSchema is needed here. resetStudentPasswordSchema (teacher action) remains below.
 
 export const createInvitationsSchema = z.object({
-  body: z.object({
-    emails: z.array(normalizedEmail).min(1).max(50),
-    role: z.enum(["student", "teacher"]),
-    period: z.string().max(16).optional().default(""), // students only; ignored for teachers
-  }),
+  body: z
+    .object({
+      // Prefer `invitees` when period/group differ per person. `emails` + shared
+      // period/groupCode remains supported for simple paste invites.
+      emails: z.array(normalizedEmail).max(50).optional(),
+      invitees: z
+        .array(
+          z.object({
+            email: normalizedEmail,
+            period: z.string().max(16).optional().default(""),
+            groupCode: z.string().max(16).optional().default(""),
+            fullName: z.string().trim().max(80).optional().default(""),
+          })
+        )
+        .max(50)
+        .optional(),
+      role: z.enum(["student", "teacher"]),
+      period: z.string().max(16).optional().default(""), // students only; ignored for teachers
+      groupCode: z.string().max(16).optional().default(""), // students only; ignored for teachers
+    })
+    .refine((b) => (b.emails?.length || 0) > 0 || (b.invitees?.length || 0) > 0, {
+      message: "Provide at least one email in emails or invitees.",
+    })
+    .refine((b) => {
+      const emails = new Set([...(b.emails || []), ...((b.invitees || []).map((i) => i.email))]);
+      return emails.size >= 1 && emails.size <= 50;
+    }, {
+      message: "Invite between 1 and 50 unique emails.",
+    }),
   params: z.object({
     workspaceId: z.string().uuid(),
   }),

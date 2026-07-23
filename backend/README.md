@@ -48,7 +48,7 @@ Full reference: [`docs/openapi.yaml`](../docs/openapi.yaml). Key endpoints:
 - `GET|POST /api/workspaces/:workspaceId/sessions` · `GET|POST /api/workspaces/:workspaceId/measurements`
 - `GET /api/workspaces/:workspaceId/analytics/summary` · `/heatmap` · `/export/measurements.csv`
 
-## Seeded class (Lincoln High School)
+## Seeded class (Abraham Lincoln High School)
 
 After `npm run db:seed`:
 
@@ -75,7 +75,7 @@ After `npm run db:seed`:
 
 The seed also creates:
 
-- Workspace **Lincoln High School** with **14 sessions and ~4,200 per-second measurements**
+- Workspace **Ms. Rivera's Science Class** at **Abraham Lincoln High School**, with **14 sessions and ~4,200 per-second measurements**
   (Ms. Rivera's P3/P5 classes, plus P2 sessions labelled with instructor "Mr. Chen")
 - Class grid: **2 periods, 6 groups**
 - Join codes **P3RVK** (active, period **P3**) and **P5RVM** (inactive, period **P5**) — a code's

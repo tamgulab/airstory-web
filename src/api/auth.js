@@ -104,6 +104,21 @@ export async function getMe() {
   return apiRequest("/auth/me");
 }
 
+/**
+ * Update the signed-in user's GLOBAL account profile (same in every workspace). Partial —
+ * only the provided fields change. Returns { profile: { display_name, title, bio } }.
+ */
+export async function updateAccountProfile({ displayName, title, bio } = {}) {
+  const body = {};
+  if (displayName !== undefined) body.displayName = displayName;
+  if (title !== undefined) body.title = title;
+  if (bio !== undefined) body.bio = bio;
+  return apiRequest("/auth/me/account-profile", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
 /** Persist school code, class (instructor) name, period, group on the signed-in user's profile in one workspace. */
 export async function updateMyProfile(workspaceId, { schoolCode, instructor, period, groupCode } = {}) {
   const body = { workspaceId };

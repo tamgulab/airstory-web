@@ -9,25 +9,13 @@ import {
   removeStudent,
   resetStudentPassword,
   revokeInvitation,
+  setWorkspaceSchool,
   updateClassStructure,
   updateStudentPlacement,
 } from '../api/auth';
+import { getSchools } from '../api/schools';
 import ConfirmDialog from './ConfirmDialog';
-import { extractInviteEmails, parseInviteSpreadsheet } from '../utils/inviteSpreadsheet';
-
-/** Prefer a full email; bare local-parts / codes get a clear no-domain label. */
-function formatMemberContact(m) {
-  const email = String(m?.email || '').trim();
-  if (email.includes('@')) return email;
-  const code = String(m?.student_code || email || m?.username || '').trim();
-  if (!code) return '—';
-  return code.includes('@') ? code : `${code} (no domain)`;
-}
-
-function needsGroupAssign(m) {
-  const g = String(m?.group_code || '').trim();
-  return !g || g === 'G?' || g === '?';
-}
+import SchoolCombobox from './SchoolCombobox';
 
 export default function ManageClasses({
   workspaceId,
@@ -35,7 +23,7 @@ export default function ManageClasses({
   onGroupSelect,
   viewerProfile,
   onClassStructureChanged,
-  onEditSchool,
+  onSchoolChanged,
 }) {
   const [members, setMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
@@ -74,6 +62,13 @@ export default function ManageClasses({
   const [dragMember, setDragMember] = useState(null);
   const [dropTarget, setDropTarget] = useState(null); // `${period}-${group}` being hovered
   const [toast, setToast] = useState(null); // { message, undo } | null
+
+  // Inline school editor (moved here from My Page — the class's school is a workspace-scoped setting).
+  const [schoolEditing, setSchoolEditing] = useState(false);
+  const [schoolInput, setSchoolInput] = useState('');
+  const [schoolOptions, setSchoolOptions] = useState([]);
+  const [schoolBusy, setSchoolBusy] = useState(false);
+  const [schoolError, setSchoolError] = useState('');
 
   /** Copy text to the clipboard with per-item "Copied" feedback (keyed by invite id, etc.). */
   const copyText = async (text, key) => {
@@ -399,6 +394,54 @@ export default function ManageClasses({
   const hasSchool = Boolean(viewerProfile?.school && String(viewerProfile.school).trim());
   const teacherName = viewerProfile?.instructor || '—';
 
+  // Open the inline school editor: seed the input and pull the school directory for the picker.
+  const openSchoolEditor = () => {
+    setSchoolError('');
+    setSchoolInput(viewerProfile?.school || '');
+    setSchoolEditing(true);
+    getSchools()
+      .then((data) => setSchoolOptions(data.schools || []))
+      .catch(() => setSchoolOptions([]));
+  };
+
+  // Save the class's school. It maps this class to a school workspace, so it must be a directory
+  // entry (not free text). onSchoolChanged re-syncs the account so the new school reflects here.
+  const handleSaveSchool = async () => {
+    setSchoolError('');
+    const value = schoolInput.trim();
+    const match = schoolOptions.find((s) => s.name.toLowerCase() === value.toLowerCase());
+    if (!match) {
+      setSchoolError('Pick a school from the list.');
+      return;
+    }
+    setSchoolBusy(true);
+    try {
+      await setWorkspaceSchool(workspaceId, match.id);
+      setSchoolEditing(false);
+      await onSchoolChanged?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not save school.');
+    } finally {
+      setSchoolBusy(false);
+    }
+  };
+
+  // Detach the class from its school: members leave the school workspace (they keep Public).
+  const handleRemoveSchool = async () => {
+    setSchoolError('');
+    setSchoolBusy(true);
+    try {
+      await setWorkspaceSchool(workspaceId, null);
+      setSchoolInput('');
+      setSchoolEditing(false);
+      await onSchoolChanged?.();
+    } catch (e) {
+      setSchoolError(e.message || 'Could not remove school.');
+    } finally {
+      setSchoolBusy(false);
+    }
+  };
+
   // Sessions per (period, group) for THIS teacher's class — feeds shrink protection (Section 4).
   const sessionsByGroup = {};
 
@@ -446,19 +489,62 @@ export default function ManageClasses({
               <p className="text-xs text-gray-500">Current saved structure</p>
             </div>
           </div>
-          <span className="text-xs text-gray-400 text-right">School changes live in My Page</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <div>
             <p className="text-xs text-gray-500">School · Teacher</p>
-            {hasSchool ? (
-              <p className="text-lg font-bold text-gray-900">{viewerProfile.school}</p>
+            {schoolEditing ? (
+              <div className="mt-1">
+                <SchoolCombobox
+                  id="school-input"
+                  value={schoolInput}
+                  onChange={(v) => { setSchoolInput(v); setSchoolError(''); }}
+                  options={schoolOptions.map((s) => s.name)}
+                  placeholder="Search or select a school"
+                  inputClassName="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                />
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveSchool}
+                    disabled={schoolBusy}
+                    className={`px-3 py-1.5 text-sm ${theme.bg} ${theme.hover} text-white font-medium rounded-lg transition-colors disabled:opacity-50`}
+                  >
+                    {schoolBusy ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setSchoolEditing(false); setSchoolError(''); }}
+                    disabled={schoolBusy}
+                    className="px-3 py-1.5 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  {hasSchool && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveSchool}
+                      disabled={schoolBusy}
+                      className="px-3 py-1.5 text-sm text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-medium rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {schoolError ? (
+                  <p className="text-xs text-red-600 mt-1">{schoolError}</p>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Sets the school for this whole class — its members join the school workspace.
+                  </p>
+                )}
+              </div>
             ) : (
               <p className="text-lg font-bold text-gray-900">
-                <span className="text-gray-400">Not set</span>{' '}
+                {hasSchool ? viewerProfile.school : <span className="text-gray-400">Not set</span>}{' '}
                 <button
                   type="button"
-                  onClick={onEditSchool}
+                  onClick={openSchoolEditor}
                   className="align-middle text-sm font-semibold text-blue-600 hover:text-blue-700 underline"
                 >
                   (Edit)

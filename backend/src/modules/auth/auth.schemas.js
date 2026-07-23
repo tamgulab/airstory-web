@@ -136,6 +136,25 @@ export const updateClassStructureSchema = z.object({
   query: z.object({}).passthrough(),
 });
 
+/**
+ * Signed-in user updates their global account profile (account_profiles) — identity that is the
+ * same in every workspace. All fields optional so callers can patch one at a time; at least one
+ * must be present so an empty PATCH is rejected.
+ */
+export const updateAccountProfileSchema = z.object({
+  body: z
+    .object({
+      displayName: z.string().trim().max(120).optional(),
+      title: z.string().trim().max(80).optional(),
+      bio: z.string().trim().max(500).optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, {
+      message: "Provide at least one field to update (displayName, title, or bio).",
+    }),
+  params: z.object({}).passthrough(),
+  query: z.object({}).passthrough(),
+});
+
 /** Signed-in user updates their own row in user_profiles (school / class name / placement). */
 export const updateMyProfileSchema = z.object({
   body: z.object({

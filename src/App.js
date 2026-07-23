@@ -8,7 +8,7 @@ import AnalysisView from "./components/AnalysisView";
 import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap } from "lucide-react";
+import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap, ChevronDown } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -90,6 +90,8 @@ const METRIC_THEMES = {
 const WORKSPACE_STORAGE_KEY = "airstory.currentWorkspaceId";
 /** Carries an invite token through the Firebase handshake (popup, refresh, log-in-then-accept). */
 const INVITE_TOKEN_STORAGE_KEY = "airstory.pendingInviteToken";
+/** The nav section the user is viewing, persisted so a reload stays put instead of resetting to Heat Map. */
+const ACTIVE_SECTION_STORAGE_KEY = "airstory.activeSection";
 
 function readInviteTokenFromLocation() {
   const pathMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9_-]{20,})/);
@@ -99,9 +101,15 @@ function readInviteTokenFromLocation() {
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [activeSection, setActiveSection] = useState("heatmap");
-  // Bumped to signal MyPage to scroll/focus the school field (e.g. from Manage Classes "Edit").
-  const [schoolFocusNonce, setSchoolFocusNonce] = useState(0);
+  // False until Firebase reports the persisted session on reload. Until then we must not assume
+  // logged-out, or the login screen flashes before the restored session arrives.
+  const [authReady, setAuthReady] = useState(false);
+  const [activeSection, setActiveSection] = useState(
+    () => localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY) || "heatmap"
+  );
+  // User menu (popup on the avatar). Holds account actions like My Page; more options to come.
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
   const [workspaceId, setWorkspaceId] = useState("");
@@ -111,6 +119,10 @@ export default function App() {
   const [workspaceTooltip, setWorkspaceTooltip] = useState(null);
   /** All workspaces the user belongs to (from /auth/me), each with its embedded profile. */
   const [memberships, setMemberships] = useState([]);
+  /** Account identity + global profile from /auth/me (same in every workspace). Feeds My Page
+   * directly so it renders instantly without its own network round trip. */
+  const [account, setAccount] = useState(null); // { id, email, full_name }
+  const [accountProfile, setAccountProfile] = useState({ display_name: "", title: "", bio: "" });
   const [pendingInviteToken, setPendingInviteToken] = useState(() => {
     const fromUrl = readInviteTokenFromLocation();
     const token = fromUrl || sessionStorage.getItem(INVITE_TOKEN_STORAGE_KEY) || "";
@@ -215,9 +227,15 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setIsLoggedIn(Boolean(user));
+      setAuthReady(true);
     });
     return unsubscribe;
   }, []);
+
+  // Remember the current nav section so a reload returns here instead of resetting to Heat Map.
+  useEffect(() => {
+    localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, activeSection);
+  }, [activeSection]);
 
   const clearPendingInvite = useCallback(() => {
     sessionStorage.removeItem(INVITE_TOKEN_STORAGE_KEY);
@@ -242,6 +260,9 @@ export default function App() {
       setNeedsOnboarding(false);
       const nextMemberships = me?.memberships || [];
       setMemberships(nextMemberships);
+      // Global account data for My Page (workspace-independent).
+      setAccount(me?.user || null);
+      setAccountProfile(me?.profile || { display_name: "", title: "", bio: "" });
       const membership = pickMembership(nextMemberships);
       const profile = membership?.profile || null;
       // School is a per-class property (workspaces.school_id → membership.school_name), not the
@@ -724,8 +745,10 @@ export default function App() {
     return "WS";
   };
 
-  const teacherNavInitials = () => {
-    const name = (viewerProfile.displayName || "").trim();
+  // Avatar initials for the person, from the global account profile - the same in every workspace
+  // (owned or not). Falls back to the account name, then the per-workspace display name.
+  const accountInitials = () => {
+    const name = (accountProfile.display_name || account?.full_name || viewerProfile.displayName || "").trim();
     const parts = name.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
       return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -736,25 +759,64 @@ export default function App() {
     if (parts.length === 1 && parts[0].length === 1) {
       return `${parts[0]}•`.toUpperCase();
     }
-    return "IN";
+    return "ME";
   };
 
+  // Close the user-avatar popup on outside click or Escape.
+  useEffect(() => {
+    if (!userMenuOpen) return undefined;
+    const onPointerDown = (e) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setUserMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [userMenuOpen]);
+
+  // Note: "My Page" lives in the user-avatar popup (see below), not the top nav.
   const navItems = isTeacher
     ? [
         { id: 'manageclasses', label: 'Manage Classes', icon: Users },
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
-        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
-        { id: 'mypage', label: 'My Page', icon: User },
       ]
     : [
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
-        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
-        { id: 'mypage', label: 'My Page', icon: User },
       ];
+
+  // Wait for Firebase to report the persisted session before choosing login vs. app, so a reload
+  // of a signed-in user doesn't flash the login screen while the session is still being restored.
+  if (!authReady) {
+    return (
+      <div
+        className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col"
+        style={{
+          backgroundImage: `radial-gradient(#cbd5e1 1px, transparent 1px)`,
+          backgroundSize: '24px 24px',
+        }}
+      >
+        <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600" />
+        <div className="flex-1 flex items-center justify-center">
+          <div
+            className="h-10 w-10 rounded-full border-4 border-slate-200 border-t-blue-600 animate-spin"
+            role="status"
+            aria-label="Loading"
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (!isLoggedIn) {
     return (
@@ -999,6 +1061,64 @@ export default function App() {
                 <span className="hidden lg:inline">Logout</span>
               </button>
             </div>
+
+            {/* User menu — click the avatar to open a popup of account options. Hidden in public mode. */}
+            {!isPublicMode && (
+              <div className="relative" ref={userMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setUserMenuOpen((open) => !open)}
+                  className="flex items-center gap-3 rounded-full pl-2 pr-1 py-1 hover:bg-gray-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  aria-haspopup="menu"
+                  aria-expanded={userMenuOpen}
+                  aria-label="Account menu"
+                >
+                  <div className="text-right hidden lg:block">
+                    <p className="text-sm font-medium text-gray-900">
+                      {isTeacher ? (viewerProfile.instructor || "Instructor") : (viewerProfile.studentId || filters.studentId)}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {isTeacher
+                        ? `${viewerProfile.school || filters.school} • Teacher Portal`
+                        : `${viewerProfile.school || filters.school} - Group ${(viewerProfile.group || filters.group).replace('G', '')}`}
+                    </p>
+                  </div>
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md">
+                    <span className="text-white text-sm font-semibold">
+                      {accountInitials()}
+                    </span>
+                  </div>
+                  <ChevronDown
+                    className={`w-4 h-4 text-gray-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {userMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 z-50 animate-fade-in"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setActiveSection('mypage');
+                        setUserMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium transition-colors ${
+                        activeSection === 'mypage'
+                          ? 'text-blue-600 bg-blue-50'
+                          : 'text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      <User className="w-4 h-4" />
+                      My Page
+                    </button>
+                    {/* Future account options go here */}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </nav>
@@ -1083,17 +1203,12 @@ export default function App() {
         )}
         {activeSection === 'mypage' && (
           <MyPage
-            workspaceId={workspaceId}
-            userRole={userRole}
-            viewerProfile={viewerProfile}
-            filters={filters}
-            setFilters={setFilters}
             theme={currentTheme}
             onLogout={handleLogout}
-            classStructure={classStructure}
-            onProfileSaved={syncFromMe}
-            focusSchoolSignal={schoolFocusNonce}
-            schoolEditable={isTeacher && currentWorkspaceKind === "class"}
+            memberships={memberships}
+            account={account}
+            profile={accountProfile}
+            onProfileSaved={setAccountProfile}
           />
         )}
         {activeSection === 'manageclasses' && isTeacher && (
@@ -1106,10 +1221,7 @@ export default function App() {
               if (next && typeof next === "object") setClassStructure(next);
               else refreshClassStructure();
             }}
-            onEditSchool={() => {
-              setActiveSection("mypage");
-              setSchoolFocusNonce((n) => n + 1);
-            }}
+            onSchoolChanged={syncFromMe}
           />
         )}
       </main>

@@ -25,7 +25,7 @@ const Button = ({ children, variant = 'primary', className = '', ...props }) => 
   );
 };
 
-const AIR_FACTS = [
+export const AIR_FACTS = [
   "Trees act as natural air filters! One mature tree can absorb up to 48 lbs of CO2 per year.",
   "PM2.5 particles are about 30 times smaller than the width of a human hair.",
   "Rain can temporarily lower airborne particle levels by washing pollutants out of the air.",

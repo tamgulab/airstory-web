@@ -2,17 +2,18 @@ name: Deploy GitHub Pages (Air Quality Tracker)
 
 # Build from repo root. Uses GitHub’s Pages artifact flow — requires:
 # Settings → Pages → Source = **GitHub Actions** (not “Deploy from branch”).
-# If you prefer updating only the `gh-pages` branch, use `npm run deploy` locally instead.
+# Push to `main` is the only trigger. There is no manual/local deploy path.
 on:
-  # IMPORTANT:
-  # This repo contains two GitHub Pages deploy workflows:
-  # - deploy-gh-pages.yml (root app in `src/`)
-  # - deploy-gh-pages-phg.yml (PHG variant in `phg/`)
-  #
-  # GitHub Pages serves ONE site per repo, so whichever workflow deploys last
-  # overwrites the site. We keep the PHG workflow as the default auto-deploy
-  # and disable this root workflow on push to prevent accidental overwrites.
-  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tailwind.config.js"
+      - "postcss.config.js"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -48,6 +49,15 @@ jobs:
         env:
           REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL || 'https://air-sensor-api.onrender.com/api' }}
           REACT_APP_MAP_STYLE_URL: ${{ vars.REACT_APP_MAP_STYLE_URL }}
+          # src/firebase.js reads all six at module load. CRA inlines REACT_APP_*
+          # at build time, so a missing one compiles to `undefined` and the build
+          # still succeeds -- the failure surfaces later as auth/invalid-api-key.
+          REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
+          REACT_APP_FIREBASE_AUTH_DOMAIN: ${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}
+          REACT_APP_FIREBASE_PROJECT_ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}
+          REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
+          REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
+          REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
         run: npm run build
 
       - name: Upload Pages artifact

@@ -98,7 +98,6 @@ The frontend automatically points at `http://localhost:4000/api` on localhost â€
 ## Deployment
 
 - **Render** (`render.yaml` Blueprint â€” API + Postgres): `docs/DEPLOY_RENDER.md`
-- **GitHub Pages** (frontend, via `.github/workflows/deploy-gh-pages.yml` or `npm run deploy`): `docs/GITHUB_PAGES.md`
-- **Vercel** (optional): `docs/VERCEL.md`
+- **GitHub Pages** (frontend, auto-deploys on push to `main` via `.github/workflows/deploy-gh-pages.yml`): `docs/GITHUB_PAGES.md`
 
-For static builds, the `REACT_APP_*` values (API base, Firebase config, Maps key) are baked in at build time and must be provided as environment variables / Actions secrets.
+For static builds, the `REACT_APP_*` values (API base, Firebase config, map style) are baked in at build time and must be provided as environment variables / Actions secrets.

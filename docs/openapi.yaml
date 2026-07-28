@@ -119,9 +119,8 @@ components:
           type: string
           format: date-time
         accepted_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         invited_by_name:
           type: string
 
@@ -164,14 +163,12 @@ components:
           type: string
           example: Abraham Lincoln High School
         latitude:
-          type: number
+          type: [number, "null"]
           format: double
-          nullable: true
           description: Map pin latitude. Null for schools that haven't been located yet.
         longitude:
-          type: number
+          type: [number, "null"]
           format: double
-          nullable: true
           description: Map pin longitude. Null for schools that haven't been located yet.
 
     ClassStructure:
@@ -260,13 +257,11 @@ components:
           type: string
           description: student_code of the session owner (empty for teacher-created sessions).
         started_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         ended_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -303,15 +298,12 @@ components:
           type: string
           format: date-time
         latitude:
-          type: number
-          nullable: true
+          type: [number, "null"]
         longitude:
-          type: number
-          nullable: true
+          type: [number, "null"]
         indoor_outdoor:
-          type: string
-          enum: [INDOOR, OUTDOOR]
-          nullable: true
+          type: [string, "null"]
+          enum: [INDOOR, OUTDOOR, null]
         pm25:
           type: number
         co:
@@ -377,20 +369,15 @@ components:
       type: object
       properties:
         mean:
-          type: number
-          nullable: true
+          type: [number, "null"]
         min:
-          type: number
-          nullable: true
+          type: [number, "null"]
         max:
-          type: number
-          nullable: true
+          type: [number, "null"]
         median:
-          type: number
-          nullable: true
+          type: [number, "null"]
         stddev:
-          type: number
-          nullable: true
+          type: [number, "null"]
         sample_count:
           type: integer
 
@@ -606,9 +593,8 @@ paths:
                             read-only aggregate views; every account auto-joins Public, and joins
                             the 'school' workspace for each school its classes belong to.
                         school_id:
-                          type: string
+                          type: [string, "null"]
                           format: uuid
-                          nullable: true
                           description: The school this workspace belongs to (class) or represents (school). Null otherwise.
                         school_name:
                           type: string
@@ -729,9 +715,8 @@ paths:
               required: [schoolId]
               properties:
                 schoolId:
-                  type: string
+                  type: [string, "null"]
                   format: uuid
-                  nullable: true
       responses:
         '200':
           description: Updated workspace
@@ -752,9 +737,8 @@ paths:
                         type: string
                         enum: [class, school, public]
                       school_id:
-                        type: string
+                        type: [string, "null"]
                         format: uuid
-                        nullable: true
         '400':
           description: Not a class workspace, or unknown school
           content:
@@ -1591,15 +1575,12 @@ paths:
                   type: string
                   format: date-time
                 latitude:
-                  type: number
-                  nullable: true
+                  type: [number, "null"]
                 longitude:
-                  type: number
-                  nullable: true
+                  type: [number, "null"]
                 indoorOutdoor:
-                  type: string
-                  enum: [INDOOR, OUTDOOR]
-                  nullable: true
+                  type: [string, "null"]
+                  enum: [INDOOR, OUTDOOR, null]
                 pm25:
                   type: number
                 co:
@@ -1828,11 +1809,9 @@ paths:
                         enum: [INDOOR, OUTDOOR, IN, INSIDE, OUT]
                         default: OUTDOOR
                       latitude:
-                        type: number
-                        nullable: true
+                        type: [number, "null"]
                       longitude:
-                        type: number
-                        nullable: true
+                        type: [number, "null"]
                       pm25:
                         type: number
                       co:

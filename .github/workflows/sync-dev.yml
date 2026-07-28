@@ -1,0 +1,20 @@
+name: Sync dev with main
+
+# The dev -> main PR creates a merge commit on `main` that `dev` never sees.
+# This pushes it back so dev stops drifting behind.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - run: git push origin "origin/main:refs/heads/dev"

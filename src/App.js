@@ -1010,48 +1010,8 @@ export default function App() {
               })}
             </div>
 
-            {/* Account cluster: identity + logout stay together on the right */}
+            {/* Logout sits on the right; identity lives in the account menu below. */}
             <div className="flex shrink-0 items-center gap-3 xl:gap-4">
-              {!isPublicMode && (
-                <>
-                  <div className="hidden min-w-[12rem] max-w-[16rem] text-right lg:block xl:max-w-[20rem] 2xl:max-w-[24rem]">
-                    <p className="truncate text-sm font-medium text-gray-900">
-                      {isTeacher
-                        ? (viewerProfile.displayName || viewerProfile.instructor || "Instructor")
-                        : (viewerProfile.displayName || viewerProfile.studentId || filters.studentId || "Student")}
-                    </p>
-                    <p
-                      className="truncate text-xs text-gray-500"
-                      title={viewerProfile.school || filters.school || undefined}
-                    >
-                      {viewerProfile.school || filters.school || "No school assigned"}
-                    </p>
-                    <p className="truncate text-[11px] text-gray-400">
-                      {isTeacher
-                        ? "Teacher Portal"
-                        : `Group ${(viewerProfile.group || filters.group || "").replace("G", "") || "—"}`}
-                    </p>
-                  </div>
-                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md shrink-0">
-                    <span className="text-white text-sm font-semibold">
-                      {isTeacher
-                        ? accountInitials()
-                        : (() => {
-                            const name = (viewerProfile.displayName || "").trim();
-                            const parts = name.split(/\s+/).filter(Boolean);
-                            if (parts.length >= 2) {
-                              return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-                            }
-                            if (parts.length === 1 && parts[0].length >= 2) {
-                              return parts[0].slice(0, 2).toUpperCase();
-                            }
-                            const code = viewerProfile.studentId || filters.studentId || "ST";
-                            return code.slice(0, 2).toUpperCase();
-                          })()}
-                    </span>
-                  </div>
-                </>
-              )}
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg font-medium text-red-600 hover:bg-red-50 transition-all"

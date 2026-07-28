@@ -3,6 +3,31 @@
 -- the single 'public' workspace is a read-only view over all sessions flagged visibility='public'.
 -- Data is never stored in these workspaces — it lives in 'class' workspaces and is surfaced here
 -- by the kind-aware read queries. Runs after 006_schools.sql so the schools FK resolves.
+--
+-- Older databases may have been created from an early 001_init that lacked workspaces.kind.
+-- CREATE TABLE IF NOT EXISTS in 001 will not add the column later, so ensure it here.
+
+ALTER TABLE workspaces
+  ADD COLUMN IF NOT EXISTS kind TEXT;
+
+UPDATE workspaces
+SET kind = 'class'
+WHERE kind IS NULL OR kind = '';
+
+ALTER TABLE workspaces
+  ALTER COLUMN kind SET DEFAULT 'class';
+
+ALTER TABLE workspaces
+  ALTER COLUMN kind SET NOT NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE workspaces
+    ADD CONSTRAINT workspaces_kind_check
+    CHECK (kind IN ('class', 'school', 'public'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 ALTER TABLE workspaces
   ADD COLUMN IF NOT EXISTS school_id UUID REFERENCES schools(id) ON DELETE CASCADE;

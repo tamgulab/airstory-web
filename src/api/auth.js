@@ -144,11 +144,17 @@ export async function getRoster(workspaceId) {
   return apiRequest(`/auth/workspaces/${workspaceId}/roster`);
 }
 
-/** Teacher: invite people by email. Returns { invitations, skipped }; links are composed client-side. */
-export async function createInvitations(workspaceId, { emails, role, period }) {
+/** Teacher: invite people by email. Returns { invitations, skipped }; links are composed client-side.
+ *  Pass either `emails` (+ optional shared period/groupCode) or per-person `invitees`. */
+export async function createInvitations(workspaceId, { emails, invitees, role, period, groupCode }) {
+  const body = { role };
+  if (invitees?.length) body.invitees = invitees;
+  if (emails?.length) body.emails = emails;
+  if (period) body.period = period;
+  if (groupCode) body.groupCode = groupCode;
   return apiRequest(`/auth/workspaces/${workspaceId}/invitations`, {
     method: "POST",
-    body: JSON.stringify({ emails, role, period: period || "" }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { requireAuth, requireWorkspaceRole } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { fetchOpenAQDailyReference, fetchOpenAQHeatmapPoints } from "../../services/openaq.js";
+import { fetchWaqiDailyReference, fetchWaqiHeatmapPoints } from "../../services/waqi.js";
 import { buildScopedDataFilter, resolveWorkspaceScope } from "../sensor/scope.js";
 
 const router = express.Router();
@@ -127,8 +128,8 @@ router.get(
 );
 
 /**
- * OpenAQ reference series (PM2.5 daily averages near a lat/lng).
- * Key stays server-side; frontend calls with JWT.
+ * Reference series near a lat/lng: OpenAQ first, then WAQI (Hanoi / sparse cities).
+ * Keys stay server-side; frontend calls with JWT.
  */
 router.get("/analytics/openaq/daily", async (req, res, next) => {
   try {
@@ -145,20 +146,56 @@ router.get("/analytics/openaq/daily", async (req, res, next) => {
       return res.status(400).json({ error: "date_from and date_to are required (YYYY-MM-DD)" });
     }
 
-    const result = await fetchOpenAQDailyReference({
-      apiKey: env.openaqApiKey,
-      lat,
-      lng,
-      dateFrom,
-      dateTo,
-      metric,
-    });
+    let result = null;
+    if (env.openaqApiKey) {
+      result = await fetchOpenAQDailyReference({
+        apiKey: env.openaqApiKey,
+        lat,
+        lng,
+        dateFrom,
+        dateTo,
+        metric,
+      });
+      if (result.error === "unsupported_metric") {
+        return res.status(400).json(result);
+      }
+    }
 
+    const openaqEmpty =
+      !result ||
+      result.error === "no_api_key" ||
+      result.error === "no_sensor" ||
+      !(result.points && result.points.length);
+
+    if (openaqEmpty && env.waqiApiToken) {
+      try {
+        const waqi = await fetchWaqiDailyReference({
+          token: env.waqiApiToken,
+          lat,
+          lng,
+          dateFrom,
+          dateTo,
+          metric,
+        });
+        if (waqi.points?.length) {
+          return res.json(waqi);
+        }
+        if (!result || result.error) result = waqi;
+      } catch (waqiErr) {
+        if (!result || result.error) {
+          return next(waqiErr);
+        }
+      }
+    }
+
+    if (!result) {
+      return res.status(503).json({
+        error: "no_api_key",
+        message: "Neither OPENAQ_API_KEY nor WAQI_API_TOKEN is set on the server.",
+      });
+    }
     if (result.error === "no_api_key") {
       return res.status(503).json(result);
-    }
-    if (result.error === "unsupported_metric") {
-      return res.status(400).json(result);
     }
 
     return res.json(result);
@@ -179,15 +216,45 @@ router.get("/analytics/openaq/heatmap", async (req, res, next) => {
       return res.status(400).json({ error: "lat and lng query params are required" });
     }
 
-    const result = await fetchOpenAQHeatmapPoints({
-      apiKey: env.openaqApiKey,
-      lat,
-      lng,
-      metric,
-      radius,
-      limit,
-    });
+    let result = null;
+    if (env.openaqApiKey) {
+      result = await fetchOpenAQHeatmapPoints({
+        apiKey: env.openaqApiKey,
+        lat,
+        lng,
+        metric,
+        radius,
+        limit,
+      });
+      if (result.error === "unsupported_metric") return res.status(400).json(result);
+    }
 
+    const openaqEmpty =
+      !result ||
+      result.error === "no_api_key" ||
+      !(result.points && result.points.length);
+
+    if (openaqEmpty && env.waqiApiToken) {
+      try {
+        const waqi = await fetchWaqiHeatmapPoints({
+          token: env.waqiApiToken,
+          lat,
+          lng,
+          metric,
+        });
+        if (waqi.points?.length) return res.json(waqi);
+        if (!result || result.error) result = waqi;
+      } catch (waqiErr) {
+        if (!result || result.error) return next(waqiErr);
+      }
+    }
+
+    if (!result) {
+      return res.status(503).json({
+        error: "no_api_key",
+        message: "Neither OPENAQ_API_KEY nor WAQI_API_TOKEN is set on the server.",
+      });
+    }
     if (result.error === "no_api_key") return res.status(503).json(result);
     if (result.error === "unsupported_metric") return res.status(400).json(result);
     return res.json(result);

@@ -21,7 +21,11 @@ const OnboardingForm = ({ defaultName = '', email = '', inviteToken = '', onSubm
     let cancelled = false;
     getInvitePreview(inviteToken)
       .then((data) => {
-        if (!cancelled) setInvitePreview(data);
+        if (cancelled) return;
+        setInvitePreview(data);
+        if (data?.fullName) {
+          setFullName((prev) => (prev.trim() ? prev : data.fullName));
+        }
       })
       .catch((e) => {
         if (!cancelled) setInviteError(e.message || 'This invite link is not valid.');

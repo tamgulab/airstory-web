@@ -5,8 +5,7 @@ import { ChevronDown, Check } from 'lucide-react';
  * Editable combobox for picking a school from the internal directory.
  * - Clicking (or focusing) the field opens the full list.
  * - Typing filters the list (case-insensitive substring) and keeps it open.
- * - Free text is allowed: the value is whatever is in the input, so a school not yet
- *   in the directory can still be entered.
+ * - The parent validates that the final value is one of the located directory schools.
  *
  * Props:
  *   value          current text value
@@ -30,6 +29,7 @@ export default function SchoolCombobox({
   const [highlight, setHighlight] = useState(-1);
   const wrapRef = useRef(null);
   const listRef = useRef(null);
+  const listboxId = `${id || 'school'}-listbox`;
 
   const filtered = useMemo(() => {
     const q = (value || '').trim().toLowerCase();
@@ -91,7 +91,9 @@ export default function SchoolCombobox({
           type="text"
           role="combobox"
           aria-expanded={open}
+          aria-controls={listboxId}
           aria-autocomplete="list"
+          aria-activedescendant={open && highlight >= 0 ? `${listboxId}-option-${highlight}` : undefined}
           autoComplete="off"
           value={value}
           disabled={disabled}
@@ -120,17 +122,19 @@ export default function SchoolCombobox({
 
       {open && (
         <ul
+          id={listboxId}
           ref={listRef}
           role="listbox"
           className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg"
         >
           {filtered.length === 0 ? (
-            <li className="px-4 py-2 text-sm text-gray-500">No matching schools — you can type a custom name.</li>
+            <li className="px-4 py-2 text-sm text-gray-500">No matching schools.</li>
           ) : (
             filtered.map((name, i) => {
               const selected = name === value;
               return (
                 <li
+                  id={`${listboxId}-option-${i}`}
                   key={name}
                   role="option"
                   aria-selected={selected}

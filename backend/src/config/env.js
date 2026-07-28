@@ -42,6 +42,8 @@ export const env = {
   googlePrivateKey: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   /** OpenAQ v3 — keep in backend only; never commit (see backend/.env.example). */
   openaqApiKey: process.env.OPENAQ_API_KEY || "",
+  /** WAQI / aqicn.org — Hanoi (and sparse-coverage) fallback when OpenAQ is empty. */
+  waqiApiToken: process.env.WAQI_API_TOKEN || "",
 };
 
 export function isProduction() {

@@ -1,0 +1,123 @@
+name: CI
+
+# Verification gate. Runs BEFORE code lands, unlike deploy-gh-pages.yml which
+# runs after a merge to `main` and only publishes.
+#
+# Feature branches merge into `dev` directly, so `push: dev` is the check that
+# catches a bad direct merge. `pull_request` covers the dev -> main review gate.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+# One run per branch/PR. A new push supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend (test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # `npm ci` also fails if package.json and package-lock.json disagree,
+      # which is the check that keeps a hand-edited dependency from reaching main.
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        env:
+          CI: true
+        run: npm test -- --watchAll=false
+
+      # CI=true makes CRA treat ESLint warnings as errors, so this doubles as lint.
+      # Uses the same env defaults as the deploy workflow; no real secrets needed
+      # to prove the bundle compiles.
+      - name: Build
+        env:
+          CI: true
+          REACT_APP_API_BASE_URL: https://air-sensor-api.onrender.com/api
+        run: npm run build
+
+  backend:
+    name: Backend (migrations)
+    runs-on: ubuntu-latest
+
+    # Mirrors docker-compose.yml so migrations run against the same Postgres major.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: air_sensor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Matches pool.js's local-DB detection, so it connects without TLS.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/air_sensor
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        working-directory: backend
+        run: npm ci
+
+      # Render's startCommand is `migrate && server`, so a migration that fails
+      # here is a service that never boots in production.
+      - name: Run migrations on a clean database
+        working-directory: backend
+        run: npm run db:migrate
+
+      # Every Render deploy and restart re-runs migrate against a database that
+      # already has the schema. This proves that second run is a no-op.
+      - name: Re-run migrations (must be idempotent)
+        working-directory: backend
+        run: npm run db:migrate
+
+  openapi:
+    name: OpenAPI spec
+    runs-on: ubuntu-latest
+    # Blocking. The spec is 3.1-valid (0 errors); redocly exits non-zero on errors
+    # only, so the 44 remaining style warnings annotate the run without failing it.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Lint spec
+        run: npx --yes @redocly/cli@latest lint docs/openapi.yaml

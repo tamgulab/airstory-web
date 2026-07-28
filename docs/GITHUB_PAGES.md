@@ -2,35 +2,32 @@
 
 ## Canonical frontend location
 
-The **main React app** lives at the **repository root**: `package.json`, `src/`, `public/`.
+The **main React app** lives at the **repository root**: `package.json`, `src/`, `public/`. The build runs from the root only.
 
-The nested folder `air-quality-tracker/` is a **legacy / alternate CRA tree** (older dashboard-only prototype). **GitHub Actions and manual deploy must build from the root**, not from `air-quality-tracker/`.
+If the live site shows old behavior, the Pages bundle was almost certainly built from an old commit, or Pages **Source** is not set to GitHub Actions (see below). Fix the build source first, not only hard refresh.
 
-If the live site shows old behavior (e.g. Manhattan map, missing Raw Data fixes), the Pages bundle was almost certainly built from the wrong directory or an old commit—fix CI/build source first, not only hard refresh.
-
-## Automatic deploy (recommended)
+## Deploy
 
 Workflow: [.github/workflows/deploy-gh-pages.yml](../.github/workflows/deploy-gh-pages.yml).
 
 Do **not** keep GitHub’s template workflow that uploads **`path: '.'`** (whole repo) to Pages — Create React App’s `index.html` lives in **`build/`** after `npm run build`, so that template makes the site **404**.
 
-- Triggers on push to `main` when `src/`, `public/`, `package.json`, `package-lock.json`, Tailwind/PostCSS configs, or the workflow file change (also **Actions → Run workflow**).
+- **Push to `main` is the only trigger**, and only when `src/`, `public/`, `package.json`, `package-lock.json`, Tailwind/PostCSS configs, or a workflow file change. There is no `workflow_dispatch`, so **Actions → Run workflow** is not available: to force a rebuild, push a commit touching one of those paths.
 - Runs `npm ci` and `npm run build` at the **repo root**, uploads `build/` as a Pages artifact, then **`actions/deploy-pages`** publishes it.
+- A backend-only or docs-only merge to `main` deliberately does **not** redeploy the frontend.
 
 ### Repository secrets (Actions build)
 
 | Name | Purpose |
 |------|--------|
 | `REACT_APP_API_BASE_URL` | Full API base URL ending in `/api`, e.g. `https://air-sensor-api.onrender.com/api`. If omitted, the workflow uses the same default as [DEPLOY_RENDER.md](DEPLOY_RENDER.md). |
-| `REACT_APP_GOOGLE_MAPS_API_KEY` | **Required for the heat map** (embedded at `npm run build`). Without it, the app shows “Google Maps API Key Required”. Same value as local `.env`. |
+| `REACT_APP_MAP_STYLE_URL` | Optional repository variable for a custom MapLibre-compatible style. The app defaults to OpenFreeMap's keyless Liberty style. |
 
 GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
 
-**Important:** The site is built on **GitHub Actions**, not on your laptop — **local `.env` is never uploaded.** You must create the secret on the **same repo** that hosts the site (e.g. `haetalkim/airstory`), not only on another fork/clone.
+**Important:** The site is built on **GitHub Actions**, not on your laptop, so **local `.env` is never uploaded.** Create the secret on the **same repo** that hosts the site (`tamgulab/airstory-web`), not on a fork or clone.
 
-The workflow’s **build** job uses the **`github-pages` environment**, so you can put this key either as a **repository** Actions secret or as an **environment** secret on `github-pages`.
-
-**Google Cloud Console** (API key restrictions): allow HTTP referrers for your Pages URL, e.g. `https://haetalkim.github.io/airstory/*` (and `http://localhost:*` for dev). Enable **Maps JavaScript API** (and billing if prompted).
+The workflow’s **build** job uses the **`github-pages` environment**. If you override the map style, add `REACT_APP_MAP_STYLE_URL` under **Settings → Secrets and variables → Actions → Variables**. No map API key is required for the default style.
 
 ### GitHub Pages settings (must match this workflow)
 
@@ -38,7 +35,9 @@ The workflow’s **build** job uses the **`github-pages` environment**, so you c
 
 - Source: **GitHub Actions** (not “Deploy from a branch”).
 
-If Source is **Deploy from a branch → gh-pages**, pushes from this workflow **do not** update the live URL—you must either switch Source to **GitHub Actions**, **or** deploy only via **`npm run deploy`** (updates the `gh-pages` branch).
+If Source is **Deploy from a branch → gh-pages**, pushes from this workflow **do not** update the live URL. The run still goes green and publishes an artifact that nobody serves, so a stale site with a passing Actions tab is the symptom. Switch Source to **GitHub Actions**.
+
+The legacy `gh-pages` branch is left over from the old `npm run deploy` flow and is **no longer updated**. It can be deleted once Source is confirmed.
 
 ### First deploy / stuck deploy
 
@@ -54,14 +53,16 @@ After changing auth or profile APIs, redeploy the **Render** (or other) API so t
 
 Mismatch between frontend bundle and API version often looks like “Save does nothing” or stale dropdowns.
 
-## Manual deploy (same artifact as CI)
+## Local build check
 
-From repo root:
+There is no manual deploy path. The `gh-pages` package, the `deploy`/`predeploy` scripts, and `scripts/deploy-github-pages.sh` were all removed; publishing happens only through the workflow above.
+
+To reproduce the CI build locally without publishing:
 
 ```bash
 # Optional: .env with REACT_APP_API_BASE_URL=https://your-api.../api
-npm run build
-npm run deploy   # gh-pages branch via scripts/deploy-github-pages.sh
+npm ci
+npm run build   # output in build/, same artifact CI uploads
 ```
 
-Ensure **`homepage`** in root `package.json` stays **`"."`** so asset URLs work on GitHub Pages subpaths (see [VERCEL.md](VERCEL.md)).
+Ensure **`homepage`** in root `package.json` stays **`"."`** so asset URLs resolve on the GitHub Pages subpath (`/airstory-web/`). An absolute `/` breaks every asset on a project page.

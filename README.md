@@ -74,7 +74,7 @@ npm install
 npm start              # runs on http://localhost:3000
 ```
 
-The frontend automatically points at `http://localhost:4000/api` on localhost — leave `REACT_APP_API_BASE_URL` blank for local dev. `REACT_APP_GOOGLE_MAPS_API_KEY` is only needed for the heat-map view.
+The frontend automatically points at `http://localhost:4000/api` on localhost — leave `REACT_APP_API_BASE_URL` blank for local dev. The heat-map view uses MapLibre with a keyless default style; set `REACT_APP_MAP_STYLE_URL` only to use a different compatible style.
 
 ### 5. Log in
 
@@ -98,7 +98,6 @@ The frontend automatically points at `http://localhost:4000/api` on localhost �
 ## Deployment
 
 - **Render** (`render.yaml` Blueprint — API + Postgres): `docs/DEPLOY_RENDER.md`
-- **GitHub Pages** (frontend, via `.github/workflows/deploy-gh-pages.yml` or `npm run deploy`): `docs/GITHUB_PAGES.md`
-- **Vercel** (optional): `docs/VERCEL.md`
+- **GitHub Pages** (frontend, auto-deploys on push to `main` via `.github/workflows/deploy-gh-pages.yml`): `docs/GITHUB_PAGES.md`
 
-For static builds, the `REACT_APP_*` values (API base, Firebase config, Maps key) are baked in at build time and must be provided as environment variables / Actions secrets.
+For static builds, the `REACT_APP_*` values (API base, Firebase config, map style) are baked in at build time and must be provided as environment variables / Actions secrets.

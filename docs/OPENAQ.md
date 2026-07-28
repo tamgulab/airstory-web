@@ -1,28 +1,38 @@
-# OpenAQ (reference line on Analysis)
+# Reference air quality (OpenAQ + WAQI)
 
-The **Analysis** page can show a **reference series** from [OpenAQ](https://openaq.org/) (API v3) for **PM2.5, CO, temperature, and humidity** when a nearby OpenAQ sensor reports that parameter. The **API key never goes in the frontend** — only the backend calls OpenAQ.
+The **Analysis** page can show a **reference series** near Philadelphia / New York / Hanoi for **PM2.5** (and sometimes CO / temp / humidity). Keys stay on the **backend only**.
+
+## Priority
+
+1. **[OpenAQ](https://openaq.org/)** v3 — preferred when a nearby sensor exists.
+2. **[WAQI](https://aqicn.org/)** (aqicn.org) — fallback when OpenAQ is empty (especially **Hanoi**).
+3. Simulated city baseline — last resort in the UI.
+
+WAQI PM2.5 values are published as US EPA AQI and converted on the server to approximate **µg/m³** so they line up with classroom measurements.
 
 ## Local backend
 
-1. Copy `backend/.env.example` → `backend/.env` (already gitignored).
-2. Set:
+1. Copy `backend/.env.example` → `backend/.env` (gitignored).
+2. Set one or both:
    ```bash
-   OPENAQ_API_KEY=your_key_here
+   OPENAQ_API_KEY=your_openaq_key
+   WAQI_API_TOKEN=your_waqi_token
    ```
 3. Restart the API (`npm run dev` in `backend/`).
 
+- OpenAQ key: https://docs.openaq.org/using-the-api/api-key  
+- WAQI token: https://aqicn.org/data-platform/token/
+
 ## Production (Render)
 
-1. Web service → **Environment** → add **`OPENAQ_API_KEY`** with your key.
-2. **Save** and redeploy.
+Add **`OPENAQ_API_KEY`** and/or **`WAQI_API_TOKEN`** → Save → redeploy.
 
 ## Git
 
-- **`OPENAQ_API_KEY` must not be committed.**  
-- Repo ignores `backend/.env`, `.env`, and `.env.*` (with `!.env.example` so examples can be committed).
+Never commit real keys. `backend/.env` is ignored; keep examples in `.env.example` only.
 
 ## Behavior
 
-- For **pm25, co, temp, humidity**: the backend searches OpenAQ locations near the reference pin and, if it finds a matching sensor, returns **daily averages** for your chart date range.
-- If there is **no sensor** for that metric in the area (or OpenAQ has no data), the UI falls back to the **simulated** reference curve.
-- Coverage varies by city: many stations publish PM2.5; **temp / RH / CO** are less common on OpenAQ than on dedicated weather APIs.
+- Endpoint (unchanged for the frontend): `GET /analytics/openaq/daily` and `/analytics/openaq/heatmap`.
+- Response may include `source: "openaq" | "waqi"` and `locationName`.
+- Heat Map city overlay uses the same fallback (WAQI map bounds when OpenAQ returns no points).

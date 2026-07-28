@@ -1,4 +1,6 @@
 const IMPORTED_MEASUREMENTS_KEY = "air_imported_measurements_v1";
+/** sessionStorage: 'local-import' | 'server' — blocks poll/reload from wiping a CSV the user just loaded. */
+const IMPORTED_MEASUREMENTS_SOURCE_KEY = "air_imported_measurements_source_v1";
 
 function normalizeHeader(value) {
   return String(value || "")
@@ -72,8 +74,52 @@ export function uniqueHierarchyFromImportedRows(rows) {
   return out;
 }
 
-export function setImportedMeasurements(data) {
-  localStorage.setItem(IMPORTED_MEASUREMENTS_KEY, JSON.stringify(data || []));
+/** Stable-ish row key so a new CSV can merge with existing cache instead of wiping it. */
+export function measurementRowMergeKey(row) {
+  return [
+    row?.sessionId ?? "",
+    row?.capturedAt ?? `${row?.date ?? ""}T${row?.time ?? ""}`,
+    row?.latitude ?? "",
+    row?.longitude ?? "",
+    row?.school ?? "",
+    row?.instructor ?? "",
+    row?.period ?? "",
+    row?.group ?? "",
+    row?.location ?? "",
+  ].join("|");
+}
+
+/** Union two measurement lists (incoming wins on key collision). Keeps prior schools when importing another CSV. */
+export function mergeImportedMeasurementRows(existing = [], incoming = []) {
+  const map = new Map();
+  (Array.isArray(existing) ? existing : []).forEach((row) => {
+    if (row) map.set(measurementRowMergeKey(row), row);
+  });
+  (Array.isArray(incoming) ? incoming : []).forEach((row) => {
+    if (row) map.set(measurementRowMergeKey(row), row);
+  });
+  return [...map.values()].sort((a, b) => {
+    const ta = new Date(a.capturedAt || `${a.date}T${a.time || "00:00"}`).getTime();
+    const tb = new Date(b.capturedAt || `${b.date}T${b.time || "00:00"}`).getTime();
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+  });
+}
+
+export function setImportedMeasurements(data, { source = "server" } = {}) {
+  const payload = JSON.stringify(data || []);
+  try {
+    localStorage.setItem(IMPORTED_MEASUREMENTS_KEY, payload);
+  } catch (err) {
+    // Quota / private mode — never leave callers thinking the cache was replaced.
+    console.warn("Failed to persist measurement cache", err);
+    return false;
+  }
+  try {
+    sessionStorage.setItem(IMPORTED_MEASUREMENTS_SOURCE_KEY, source);
+  } catch {
+    // sessionStorage may be unavailable; localStorage write still succeeded.
+  }
+  return true;
 }
 
 export function getImportedMeasurements() {
@@ -87,8 +133,22 @@ export function getImportedMeasurements() {
   }
 }
 
+/** True while the browser cache is a user CSV import that has not been confirmed from the API. */
+export function isLocalImportCache() {
+  try {
+    return sessionStorage.getItem(IMPORTED_MEASUREMENTS_SOURCE_KEY) === "local-import";
+  } catch {
+    return false;
+  }
+}
+
 export function clearImportedMeasurements() {
   localStorage.removeItem(IMPORTED_MEASUREMENTS_KEY);
+  try {
+    sessionStorage.removeItem(IMPORTED_MEASUREMENTS_SOURCE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 export function parseImportedCsvRaw(csvText) {

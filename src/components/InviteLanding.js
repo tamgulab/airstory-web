@@ -52,7 +52,10 @@ const InviteLanding = ({
     setPreviewError('');
     getInvitePreview(token)
       .then((data) => {
-        if (!cancelled) setPreview(data);
+        if (!cancelled) {
+          setPreview(data);
+          if (data?.fullName) setFullName(data.fullName);
+        }
       })
       .catch((e) => {
         if (!cancelled) setPreviewError(e.message || 'This invite link is not valid.');
@@ -134,10 +137,18 @@ const InviteLanding = ({
             <p className="font-bold text-gray-900">{preview.email}</p>
           </div>
         </div>
-        {preview.period && (
+        {(preview.period || preview.groupCode) && (
           <div>
-            <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Class Period</p>
-            <p className="font-bold text-blue-700">{preview.period}</p>
+            <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Placement</p>
+            <p className="font-bold text-blue-700">
+              {[preview.period, preview.groupCode].filter(Boolean).join(' · ')}
+            </p>
+          </div>
+        )}
+        {preview.fullName && (
+          <div>
+            <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Name on file</p>
+            <p className="font-bold text-gray-900">{preview.fullName}</p>
           </div>
         )}
         {preview.invitedBy && (

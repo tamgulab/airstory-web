@@ -8,7 +8,7 @@ import AnalysisView from "./components/AnalysisView";
 import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap, ChevronDown } from "lucide-react";
+import { MapPin, Table, BarChart3, User, LogOut, Users, Globe2, GraduationCap, ChevronDown } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -1035,7 +1035,7 @@ export default function App() {
                   <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md shrink-0">
                     <span className="text-white text-sm font-semibold">
                       {isTeacher
-                        ? teacherNavInitials()
+                        ? accountInitials()
                         : (() => {
                             const name = (viewerProfile.displayName || "").trim();
                             const parts = name.split(/\s+/).filter(Boolean);

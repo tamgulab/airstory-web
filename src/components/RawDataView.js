@@ -258,6 +258,10 @@ const RawDataView = ({
         .filter((r) => selectedDatesDraft.size === 0 || selectedDatesDraft.has(r.date))
         .map((d) => d.location)
     )];
+    // rowInScope is recreated every render, so depending on it would defeat the memo. Every
+    // value it closes over (schoolFocus, filters.school, isReadOnly, scopeTab, scopeClassKey,
+    // scopeGroup) is listed here instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawData, isReadOnly, scopeTab, scopeClassKey, scopeGroup, selectedDatesDraft, viewerIdentity.school, schoolFocus, filters.school]);
 
   // If the drafted location is no longer available (scope or date draft changed), deselect it.

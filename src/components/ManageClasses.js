@@ -14,8 +14,20 @@ import {
   updateStudentPlacement,
 } from '../api/auth';
 import { getSchools } from '../api/schools';
+import { extractInviteEmails, parseInviteSpreadsheet } from '../utils/inviteSpreadsheet';
 import ConfirmDialog from './ConfirmDialog';
 import SchoolCombobox from './SchoolCombobox';
+
+/** Contact line for a roster member: email, else the student code they signed up with. */
+function formatMemberContact(m) {
+  return m?.email || m?.student_code || '-';
+}
+
+/** A student is "assigned" only once they have both a period and a group; until then the
+ *  roster and modal say Assign rather than Move. */
+function needsGroupAssign(m) {
+  return !m?.period || !m?.group_code;
+}
 
 export default function ManageClasses({
   workspaceId,

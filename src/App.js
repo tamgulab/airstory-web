@@ -8,7 +8,7 @@ import AnalysisView from "./components/AnalysisView";
 import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users, Globe2, GraduationCap, ChevronDown } from "lucide-react";
+import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap, ChevronDown } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {

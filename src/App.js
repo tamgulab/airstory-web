@@ -788,11 +788,13 @@ export default function App() {
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
       ]
     : [
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
       ];
 
   // Wait for Firebase to report the persisted session before choosing login vs. app, so a reload

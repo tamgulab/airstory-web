@@ -8,7 +8,7 @@ import AnalysisView from "./components/AnalysisView";
 import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users, Globe2, GraduationCap, ChevronDown } from "lucide-react";
+import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap, ChevronDown } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -788,11 +788,13 @@ export default function App() {
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
       ]
     : [
         { id: 'heatmap', label: 'Heat Map', icon: MapPin },
         { id: 'rawdata', label: 'Raw Data', icon: Table },
         { id: 'analysis', label: 'Analysis', icon: BarChart3 },
+        { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
       ];
 
   // Wait for Firebase to report the persisted session before choosing login vs. app, so a reload

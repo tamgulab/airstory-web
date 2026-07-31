@@ -1,10 +1,10 @@
-# General Guidelines
-
+## General Guidelines
 - Never use the em dash. Use plain dash instead.
 - When writing commit message, NEVER auto-add your agent name as co-author.
 - When making technical decisions, do not give much weight to development cost.
+- The app is not live. All development should be done with no regards to previous or current users. This includes folding migration schemes into each other when possible and removing code aimed at backward compatibility if exists.
 
-# Build
+## Build
 - The live site builds from the **repo root only**.
 
 ## Version control

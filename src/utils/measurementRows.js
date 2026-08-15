@@ -1,4 +1,4 @@
-/** Shared mapping of API measurements → table rows + minute-level grouping (Raw Data, workspace hydrate). */
+/** Shared mapping of API measurements → table rows + session-level grouping (Raw Data, workspace hydrate). */
 
 export function filterNonDemoMeasurements(measurements = []) {
   return measurements.filter((m) => {
@@ -47,8 +47,9 @@ export function groupMeasurementRowsForDisplay(rows) {
   rows.forEach((row) => {
     const captured = row.capturedAt ? new Date(row.capturedAt) : new Date(`${row.date}T${row.time || "00:00"}`);
     if (Number.isNaN(captured.getTime())) return;
-    const minuteBucket = new Date(captured);
-    minuteBucket.setSeconds(0, 0);
+    // One row per session, not per minute. A 90-second mobile recording crosses up to three
+    // wall-clock minutes and used to split into three table rows even though the backend stored
+    // it as a single session. The remaining fields still separate rows that genuinely differ.
     const key = [
       row.sessionId,
       row.location,
@@ -59,16 +60,20 @@ export function groupMeasurementRowsForDisplay(rows) {
       row.period,
       row.group,
       row.indoorOutdoor,
-      minuteBucket.toISOString(),
     ].join("|");
 
     if (!byChunk.has(key)) {
       byChunk.set(key, {
         ...row,
         id: `chunk-${row.id}`,
-        date: minuteBucket.toISOString().split("T")[0],
-        time: minuteBucket.toTimeString().slice(0, 5),
-        capturedAt: minuteBucket.toISOString(),
+        // Placeholders; the real values come from startedAt once every reading has been seen.
+        // They cannot be taken from the first row encountered: the API returns captured_at DESC,
+        // so that row is the session's LAST reading, not its first.
+        date: "",
+        time: "",
+        capturedAt: "",
+        startedAt: captured.getTime(),
+        endedAt: captured.getTime(),
         count: 0,
         pm25Sum: 0,
         coSum: 0,
@@ -79,6 +84,8 @@ export function groupMeasurementRowsForDisplay(rows) {
     }
     const agg = byChunk.get(key);
     agg.count += 1;
+    agg.startedAt = Math.min(agg.startedAt, captured.getTime());
+    agg.endedAt = Math.max(agg.endedAt, captured.getTime());
     agg.pm25Sum += Number(row.pm25) || 0;
     agg.coSum += Number(row.co) || 0;
     agg.tempSum += Number(row.temp) || 0;
@@ -91,6 +98,9 @@ export function groupMeasurementRowsForDisplay(rows) {
         minute: "2-digit",
         second: "2-digit",
       }),
+      // Sort key. `time` is only HH:MM:SS, so ordering by it breaks for a session spanning
+      // midnight; an ISO instant orders correctly and sorts lexically.
+      capturedAt: captured.toISOString(),
       pm25: Number(row.pm25) || 0,
       co: Number((Number(row.co) || 0).toFixed(2)),
       temp: Number(row.temp) || 0,
@@ -99,14 +109,30 @@ export function groupMeasurementRowsForDisplay(rows) {
   });
 
   return Array.from(byChunk.values())
-    .map((agg) => ({
-      ...agg,
-      pm25: Math.round(agg.pm25Sum / Math.max(agg.count, 1)),
-      co: (agg.coSum / Math.max(agg.count, 1)).toFixed(2),
-      temp: Math.round(agg.tempSum / Math.max(agg.count, 1)),
-      humidity: Math.round(agg.humiditySum / Math.max(agg.count, 1)),
-      detailedData: agg.detailedData.sort((a, b) => a.time.localeCompare(b.time)),
-    }))
+    .map((agg) => {
+      // The row is stamped with when the session STARTED, which is what a reader looks for in a
+      // session list. Previously this was the truncated minute of whichever reading happened to
+      // be encountered first.
+      const start = new Date(agg.startedAt);
+      return {
+        ...agg,
+        date: start.toISOString().split("T")[0],
+        time: start.toTimeString().slice(0, 5),
+        capturedAt: start.toISOString(),
+        // Headline values are MEANS over every reading in the session (unchanged arithmetic —
+        // only the set being averaged is now the session rather than one minute). A mean is right
+        // here because the row summarises a whole recording: a max would misreport a steady
+        // session as its worst instant, and the first reading is arbitrary. The per-reading
+        // values, including any peak, remain visible on expand.
+        pm25: Math.round(agg.pm25Sum / Math.max(agg.count, 1)),
+        co: (agg.coSum / Math.max(agg.count, 1)).toFixed(2),
+        temp: Math.round(agg.tempSum / Math.max(agg.count, 1)),
+        humidity: Math.round(agg.humiditySum / Math.max(agg.count, 1)),
+        detailedData: agg.detailedData
+          .slice()
+          .sort((a, b) => a.capturedAt.localeCompare(b.capturedAt)),
+      };
+    })
     .sort((a, b) => new Date(b.capturedAt) - new Date(a.capturedAt));
 }
 

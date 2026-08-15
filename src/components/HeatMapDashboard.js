@@ -6,6 +6,7 @@ import MapView, {
 import 'maplibre-gl/dist/maplibre-gl.css';
 import html2canvas from 'html2canvas';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
+import { readingWeight } from '../utils/measurementRows';
 import { getSchools } from '../api/schools';
 import { apiRequest } from '../api/http';
 import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
@@ -636,11 +637,24 @@ const HeatMapDashboard = ({
 
     // School / group cards: skip hard school-name match (CSV codes vs directory names).
     // Fall back to the full imported pool when profile filters match nothing.
+    // Rows are grouped per session, so weight by the readings each represents — otherwise a
+    // 3-reading session counts as much as a 40-reading one. See readingWeight.
+    const weightedMean = (pool) => {
+      let sum = 0;
+      let weight = 0;
+      pool.forEach((item) => {
+        const value = parseFloat(item[metric]);
+        if (!Number.isFinite(value)) return;
+        const w = readingWeight(item);
+        sum += value * w;
+        weight += w;
+      });
+      return weight > 0 ? Math.round(sum / weight) : null;
+    };
+
     const schoolData = sourceForSchoolAndGroup.filter((item) => softEq(filters.school, item.school));
     const schoolPool = schoolData.length ? schoolData : sourceForSchoolAndGroup;
-    const schoolAvg = schoolPool.length > 0
-      ? Math.round(schoolPool.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / schoolPool.length)
-      : null;
+    const schoolAvg = schoolPool.length > 0 ? weightedMean(schoolPool) : null;
 
     // Group Average — when Group isn't set (common for teachers), average all groups in the
     // current instructor / period focus instead of showing a blank dash.
@@ -651,9 +665,7 @@ const HeatMapDashboard = ({
       return true;
     });
     const groupPool = groupData.length ? groupData : sourceForSchoolAndGroup;
-    const groupAvg = groupPool.length > 0
-      ? Math.round(groupPool.reduce((sum, item) => sum + parseFloat(item[metric]), 0) / groupPool.length)
-      : null;
+    const groupAvg = groupPool.length > 0 ? weightedMean(groupPool) : null;
 
     return { city: cityAvg, school: schoolAvg, group: groupAvg };
   }, [

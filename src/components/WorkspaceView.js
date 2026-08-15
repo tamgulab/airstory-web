@@ -8,6 +8,7 @@ import {
   CheckSquare, Download, FileText, HelpCircle, LayoutGrid, Link2, Plus, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
+import { readingWeight } from '../utils/measurementRows';
 import { downloadElementAsPng } from './charts/SaveChartButton';
 import BoxPlot from './charts/BoxPlot';
 import ChartFrame from './charts/ChartFrame';
@@ -168,15 +169,19 @@ const axisLabel = (key) => {
   return column.unit ? `${column.label} (${column.unit})` : column.label;
 };
 
+// Rows are grouped per session, so each carries `count` readings. Means weight by it to average
+// at reading level; without that a 3-reading session would sway the result as much as a 40-reading
+// one. See readingWeight in utils/measurementRows.
 function averageByCategory(rows, categoryKey, valueKey) {
   const groups = new Map();
   rows.forEach((row) => {
     const category = String(row[categoryKey] || 'Unknown');
     const value = Number(row[valueKey]);
     if (!Number.isFinite(value)) return;
+    const weight = readingWeight(row);
     const aggregate = groups.get(category) || { sum: 0, count: 0 };
-    aggregate.sum += value;
-    aggregate.count += 1;
+    aggregate.sum += value * weight;
+    aggregate.count += weight;
     groups.set(category, aggregate);
   });
   return [...groups.entries()]
@@ -206,9 +211,10 @@ function dateSeries(rows, valueKey) {
     const date = String(row.date || '');
     const value = Number(row[valueKey]);
     if (!date || !Number.isFinite(value)) return;
+    const weight = readingWeight(row);
     const aggregate = groups.get(date) || { sum: 0, count: 0 };
-    aggregate.sum += value;
-    aggregate.count += 1;
+    aggregate.sum += value * weight;
+    aggregate.count += weight;
     groups.set(date, aggregate);
   });
   return [...groups.entries()]

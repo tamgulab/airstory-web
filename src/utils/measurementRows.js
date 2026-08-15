@@ -136,6 +136,21 @@ export function groupMeasurementRowsForDisplay(rows) {
     .sort((a, b) => new Date(b.capturedAt) - new Date(a.capturedAt));
 }
 
+/**
+ * How many individual readings a grouped row stands for.
+ *
+ * Since rows are grouped per session, an unweighted mean across rows would treat a 40-reading
+ * session and a 3-reading session as equally informative. Analysis / Heat Map / Workspace weight
+ * their means by this so they average at reading level.
+ *
+ * Falls back to 1 for anything without a count — OpenAQ reference points, legacy cache entries —
+ * so a mixed pool degrades to the previous unweighted behaviour rather than dropping rows.
+ */
+export function readingWeight(row) {
+  const n = Number(row?.count);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 export function workspaceMeasurementsToDisplayRows(measurements) {
   const filtered = filterNonDemoMeasurements(measurements);
   const flat = mapApiMeasurementsToFlatRows(filtered);

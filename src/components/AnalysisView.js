@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ScatterChart, Scatter, CartesianGrid, ZAxis,
@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
+import { readingWeight } from '../utils/measurementRows';
 import {
   compareHierarchyToken,
   dedupeHierarchyTokens,
@@ -67,7 +68,11 @@ const OPENAQ_REFERENCE_METRICS = ['pm25', 'co', 'temp', 'humidity'];
 const COMPARISON_PALETTE = ['#3B82F6', '#EF4444', '#10B981', '#8B5CF6', '#F59E0B', '#6366F1', '#EC4899', '#14B8A6'];
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-/** Average `metricKey` per weekday across all matching rows (rows may span several weeks). */
+/**
+ * Average `metricKey` per weekday across all matching rows (rows may span several weeks).
+ * Weighted by readings per row: rows are grouped per session, so an unweighted mean would let a
+ * 3-reading session count as much as a 40-reading one.
+ */
 function weekdayAverageSeries(rows, metricKey) {
   const byDay = {};
   rows.forEach((row) => {
@@ -76,9 +81,10 @@ function weekdayAverageSeries(rows, metricKey) {
     const label = WEEKDAY_LABELS[(d.getDay() + 6) % 7];
     const value = Number(row[metricKey]);
     if (!Number.isFinite(value)) return;
+    const weight = readingWeight(row);
     if (!byDay[label]) byDay[label] = { sum: 0, count: 0 };
-    byDay[label].sum += value;
-    byDay[label].count += 1;
+    byDay[label].sum += value * weight;
+    byDay[label].count += weight;
   });
   return WEEKDAY_LABELS.map((label) => ({
     day: label,
@@ -796,21 +802,33 @@ const AnalysisView = ({
     return { avgValue, minValue, maxValue, medianValue, standardDeviation, allValues };
   }, [monthData]);
 
-  const classAverage = useMemo(() => {
-    const schoolRows = classScopeData;
-    if (!schoolRows.length) return null;
-    return Math.round(
-      schoolRows.reduce((sum, row) => sum + Number(row[selectedMetric] || 0), 0) / schoolRows.length
-    );
-  }, [classScopeData, selectedMetric]);
+  // Reading-level mean over session-grouped rows (see readingWeight).
+  const weightedMetricMean = useCallback(
+    (rows) => {
+      if (!rows.length) return null;
+      let sum = 0;
+      let weight = 0;
+      rows.forEach((row) => {
+        const value = Number(row[selectedMetric] || 0);
+        if (!Number.isFinite(value)) return;
+        const w = readingWeight(row);
+        sum += value * w;
+        weight += w;
+      });
+      return weight > 0 ? Math.round(sum / weight) : null;
+    },
+    [selectedMetric]
+  );
 
-  const schoolAverage = useMemo(() => {
-    const schoolRows = schoolScopeData;
-    if (!schoolRows.length) return null;
-    return Math.round(
-      schoolRows.reduce((sum, row) => sum + Number(row[selectedMetric] || 0), 0) / schoolRows.length
-    );
-  }, [schoolScopeData, selectedMetric]);
+  const classAverage = useMemo(
+    () => weightedMetricMean(classScopeData),
+    [classScopeData, weightedMetricMean]
+  );
+
+  const schoolAverage = useMemo(
+    () => weightedMetricMean(schoolScopeData),
+    [schoolScopeData, weightedMetricMean]
+  );
 
   const availableCompareGroups = useMemo(() => {
     const fromData = classScopeData.map((r) => r.group).filter(Boolean);

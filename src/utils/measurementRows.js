@@ -151,6 +151,24 @@ export function readingWeight(row) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
+/**
+ * The individual readings behind a grouped row, for statistics that must see within-session
+ * variation rather than the session mean — distributions (box plots) and extremes.
+ *
+ * Falls back to the row's own value as a single reading when detailedData is absent: OpenAQ
+ * reference points, and any cache entry written before session grouping. Such a row then behaves
+ * exactly as it did before, contributing one value instead of vanishing from the chart.
+ */
+export function readingValues(row, metricKey) {
+  const detail = Array.isArray(row?.detailedData) ? row.detailedData : [];
+  if (detail.length) {
+    const values = detail.map((d) => Number(d?.[metricKey])).filter((v) => Number.isFinite(v));
+    if (values.length) return values;
+  }
+  const single = Number(row?.[metricKey]);
+  return Number.isFinite(single) ? [single] : [];
+}
+
 export function workspaceMeasurementsToDisplayRows(measurements) {
   const filtered = filterNonDemoMeasurements(measurements);
   const flat = mapApiMeasurementsToFlatRows(filtered);

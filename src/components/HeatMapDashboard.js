@@ -6,7 +6,7 @@ import MapView, {
 import 'maplibre-gl/dist/maplibre-gl.css';
 import html2canvas from 'html2canvas';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
-import { readingWeight } from '../utils/measurementRows';
+import { readingValues, readingWeight } from '../utils/measurementRows';
 import { getSchools } from '../api/schools';
 import { apiRequest } from '../api/http';
 import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
@@ -392,6 +392,9 @@ const HeatMapDashboard = ({
       group: row.group || '',
       sessionId: row.sessionId || '',
       date: row.date || '',
+      // Carried so best/worst can compare individual readings rather than session means.
+      detailedData: row.detailedData,
+      count: row.count,
     };
   }, []);
 
@@ -593,6 +596,9 @@ const HeatMapDashboard = ({
       co: point.co,
       temp: point.temp,
       humidity: point.humidity,
+      // Carried so best/worst can compare individual readings rather than session means.
+      detailedData: point.detailedData,
+      count: point.count,
       source: 'class',
     }));
     return [...openaq, ...fromClass];
@@ -676,12 +682,36 @@ const HeatMapDashboard = ({
     showHeatmap,
   ]);
 
+  // Best / worst compare INDIVIDUAL readings, not session means: a short pollution spike inside an
+  // otherwise clean recording should be able to surface as the worst location. A location without
+  // detailedData (OpenAQ reference sites, pre-grouping cache entries) falls back to its single
+  // value, so it still competes rather than dropping out.
+  const extremeReading = useCallback(
+    (loc, pick) => {
+      const values = readingValues(loc, selectedMetric);
+      return values.length ? pick(...values) : null;
+    },
+    [selectedMetric]
+  );
+
   const bestLocation = showHeatmap && locations.length
-    ? locations.reduce((best, loc) => (loc[selectedMetric] < best[selectedMetric] ? loc : best))
+    ? locations.reduce((best, loc) => {
+      const a = extremeReading(loc, Math.min);
+      const b = extremeReading(best, Math.min);
+      if (a == null) return best;
+      if (b == null) return loc;
+      return a < b ? loc : best;
+    })
     : null;
 
   const worstLocation = showHeatmap && locations.length
-    ? locations.reduce((worst, loc) => (loc[selectedMetric] > worst[selectedMetric] ? loc : worst))
+    ? locations.reduce((worst, loc) => {
+      const a = extremeReading(loc, Math.max);
+      const b = extremeReading(worst, Math.max);
+      if (a == null) return worst;
+      if (b == null) return loc;
+      return a > b ? loc : worst;
+    })
     : null;
 
   const mapCenter = useMemo(() => {

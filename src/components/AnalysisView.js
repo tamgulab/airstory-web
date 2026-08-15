@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
-import { readingWeight } from '../utils/measurementRows';
+import { readingValues, readingWeight } from '../utils/measurementRows';
 import {
   compareHierarchyToken,
   dedupeHierarchyTokens,
@@ -662,15 +662,21 @@ const AnalysisView = ({
     return imported.filter((row) => softEq(filters.instructor, row.instructor));
   }, [imported, isTeacher, filters.instructor]);
 
+  // Per-date mean, weighted by readings per session so a long recording counts for more than a
+  // short one. Only the daily VALUES change; the set of dates is untouched. stats (median / min /
+  // max / stddev) and detectOutliers still run over this series unchanged — their numbers move
+  // because their input improved, not because any weighting was applied to them.
   const monthData = useMemo(() => {
     if (!scopedData.length) return [];
     const byDate = {};
     scopedData.forEach((row) => {
       const key = row.date;
       const value = Number(row[selectedMetric] ?? 0);
+      if (!Number.isFinite(value)) return;
+      const weight = readingWeight(row);
       if (!byDate[key]) byDate[key] = { sum: 0, count: 0 };
-      byDate[key].sum += value;
-      byDate[key].count += 1;
+      byDate[key].sum += value * weight;
+      byDate[key].count += weight;
     });
     return Object.entries(byDate)
       .sort((a, b) => new Date(a[0]) - new Date(b[0]))
@@ -914,14 +920,17 @@ const AnalysisView = ({
   );
 
   // Box plot groups: distribution of the selected metric per team in the current class period.
+  // Built from the INDIVIDUAL readings, not the session means — a box plot exists to show spread,
+  // and one point per session would hide the variation inside each recording. Rows with no
+  // detailedData contribute their session mean as a single reading (see readingValues).
   const boxPlotGroups = useMemo(() => {
     const byGroup = {};
     classScopeData.forEach((row) => {
       const key = normalizeGroupToken(row.group) || 'Ungrouped';
-      const value = Number(row[selectedMetric]);
-      if (!Number.isFinite(value)) return;
+      const values = readingValues(row, selectedMetric);
+      if (!values.length) return;
       if (!byGroup[key]) byGroup[key] = [];
-      byGroup[key].push(value);
+      byGroup[key].push(...values);
     });
     return Object.entries(byGroup)
       .sort((a, b) => compareHierarchyToken(a[0], b[0]))

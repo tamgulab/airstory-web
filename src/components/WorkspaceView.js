@@ -8,7 +8,7 @@ import {
   CheckSquare, Download, FileText, HelpCircle, LayoutGrid, Link2, Plus, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importedData';
-import { readingWeight } from '../utils/measurementRows';
+import { readingValues, readingWeight } from '../utils/measurementRows';
 import { downloadElementAsPng } from './charts/SaveChartButton';
 import BoxPlot from './charts/BoxPlot';
 import ChartFrame from './charts/ChartFrame';
@@ -192,13 +192,16 @@ function averageByCategory(rows, categoryKey, valueKey) {
     }));
 }
 
+// Distribution charts use the INDIVIDUAL readings, not the session mean: a box plot exists to show
+// spread, and one point per session would hide the variation inside each recording. Rows without
+// detailedData contribute their session mean as a single reading (see readingValues).
 function boxGroups(rows, categoryKey, valueKey) {
   const groups = new Map();
   rows.forEach((row) => {
     const category = String(row[categoryKey] || 'Unknown');
-    const value = Number(row[valueKey]);
-    if (!Number.isFinite(value)) return;
-    groups.set(category, [...(groups.get(category) || []), value]);
+    const values = readingValues(row, valueKey);
+    if (!values.length) return;
+    groups.set(category, [...(groups.get(category) || []), ...values]);
   });
   return [...groups.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -747,6 +750,15 @@ const WorkspaceView = ({
     });
     return filtered.length ? filtered : imported;
   }, [imported, filters.instructor, filters.period, filters.group]);
+  // Rows are sessions, so their length is a session count. Sample size is the readings behind them.
+  const scopedMeasurementCount = useMemo(
+    () => scopedRows.reduce((sum, row) => sum + readingWeight(row), 0),
+    [scopedRows]
+  );
+  const importedMeasurementCount = useMemo(
+    () => imported.reduce((sum, row) => sum + readingWeight(row), 0),
+    [imported]
+  );
   const [builderOpen, setBuilderOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [xColumn, setXColumn] = useState('group');
@@ -778,7 +790,7 @@ const WorkspaceView = ({
     onAddItem({
       id: `chart-${Date.now()}`,
       title,
-      subtitle: `${axisLabel(xColumn)} · ${axisLabel(yColumn)} · ${scopedRows.length} rows`,
+      subtitle: `${axisLabel(xColumn)} · ${axisLabel(yColumn)} · ${scopedMeasurementCount} measurements`,
       ...preview,
     });
     setBuilderOpen(false);
@@ -1101,8 +1113,11 @@ const WorkspaceView = ({
             )}
             {imported.length > 0 && (
               <p className="mb-3 text-xs text-gray-500">
-                Using {scopedRows.length} row{scopedRows.length === 1 ? '' : 's'} from your loaded measurements
-                {scopedRows.length !== imported.length ? ` (${imported.length} total in cache)` : ''}.
+                Using {scopedMeasurementCount} measurement{scopedMeasurementCount === 1 ? '' : 's'} from your
+                loaded data
+                {scopedMeasurementCount !== importedMeasurementCount
+                  ? ` (${importedMeasurementCount} total in cache)`
+                  : ''}.
               </p>
             )}
             <div className="rounded-xl border bg-white p-3">

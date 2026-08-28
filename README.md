@@ -59,9 +59,10 @@ Then install, migrate, seed, and run:
 
 ```bash
 npm install
-npm run db:migrate   # create tables
-npm run db:seed      # seed Lincoln workspace: teacher, 10 students, 14 sessions
-npm run dev          # runs on http://localhost:4000
+npm run db:migrate     # create tables
+npm run db:reference   # school catalog + Public/school workspaces (required)
+npm run db:seed        # seed Lincoln workspace: teacher, 10 students, 14 sessions
+npm run dev            # runs on http://localhost:4000
 ```
 
 ### 4. Start the frontend
@@ -91,8 +92,9 @@ The frontend automatically points at `http://localhost:4000/api` on localhost �
 |---|---|
 | `docker compose up -d` | Start the database |
 | `docker compose down` | Stop the database |
-| `docker compose down -v` | Drop the database (fresh start — re-run `db:migrate` + `db:seed`) |
+| `docker compose down -v` | Drop the database (fresh start — re-run `db:migrate` + `db:reference` + `db:seed`) |
 | `npm run db:migrate` | Apply schema migrations |
+| `npm run db:reference` | Apply reference data (school catalog, Public/school workspaces) |
 | `npm run db:seed` | Reset the Lincoln workspace (teacher + students + sessions + measurements) |
 
 ## Deployment

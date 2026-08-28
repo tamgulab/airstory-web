@@ -10,15 +10,24 @@ verifies it with the Firebase Admin SDK and provisions/loads the matching app ac
    Admin service-account values (Firebase console → Project settings → Service accounts →
    Generate new private key).
 2. `npm install`
-3. **Production (`npm start` on Render, etc.):** each start runs `db:migrate` then the API —
-   schema is applied automatically; no Shell step required.
+3. **Production (`npm start` on Render, etc.):** each start runs `db:migrate` then `db:reference`
+   then the API — schema and reference data are applied automatically; no Shell step required.
 4. **Local dev:**
    - `npm run db:migrate` — create/update tables
-   - `npm run db:reset` — wipe the database and re-run all migrations (**deletes
+   - `npm run db:reference` — school catalog + the Public/school aggregate workspaces. Required:
+     without it the school picker is empty and new accounts get no Public membership. Idempotent,
+     and never deletes, so it is safe to re-run at any time.
+   - `npm run db:reset` — wipe the database, re-run migrations, re-apply reference data (**deletes
      all data** — dev/staging only; works with local Postgres or Supabase)
    - `npm run db:seed` — reset the Lincoln workspace (clears and recreates the teacher, students,
      sessions, and measurements)
 5. `npm run dev` (does **not** auto-migrate; run step 4 manually when the schema changes)
+
+### Schema and data
+
+`src/db/migrations/` holds schema only (DDL). Rows the app needs in order to work live in
+`src/db/reference.js` — edit the `SCHOOLS` array there to add a school, then deploy. Demo data
+stays in `src/db/seed.js` and never runs outside dev.
 
 ## Authentication
 

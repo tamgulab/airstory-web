@@ -8,7 +8,9 @@ import AnalysisView from "./components/AnalysisView";
 import WorkspaceView, { followAttachedNotes } from "./components/WorkspaceView";
 import MyPage from "./components/MyPage";
 import ManageClasses from "./components/ManageClasses";
-import { MapPin, Table, BarChart3, User, LogOut, Users, LayoutGrid, Globe2, GraduationCap, ChevronDown } from "lucide-react";
+import Avatar from "./components/ui/Avatar";
+import GuidedTour from "./components/ui/GuidedTour";
+import { MapPin, Table, BarChart3, LogOut, Users, LayoutGrid, Globe2, GraduationCap } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -86,6 +88,68 @@ const METRIC_THEMES = {
 };
 
 
+/**
+ * The "Analysis → Workspace" guided tour. It spans two sections on purpose — the whole
+ * point is to walk someone from making a chart to actually building a report with it, so
+ * the tour follows them there instead of stopping at "click this button."
+ */
+const ANALYSIS_WORKSPACE_TOUR_STEPS = [
+  {
+    section: 'analysis',
+    selector: '[data-tour="metric-chips"]',
+    title: 'Start with a metric',
+    body: 'Pick PM 2.5, CO, temperature, or humidity — every chart below focuses on whichever one is selected.',
+  },
+  {
+    section: 'analysis',
+    selector: '[data-tour="period-group"]',
+    title: 'Narrow the focus',
+    body: 'As a teacher, you can zoom into one period or group instead of the whole class.',
+  },
+  {
+    section: 'analysis',
+    selector: '[data-tour="view-toggle"]',
+    title: 'Choose how to see it',
+    body: 'Turn chart sections on or off — recent readings, trends, distribution, box plot, scatter, and insights.',
+  },
+  {
+    section: 'analysis',
+    selector: '[data-tour="compare-tab"]',
+    title: 'Compare against others',
+    body: 'Switch here to line your data up against other groups, your class, your school, or nearby city sensors.',
+  },
+  {
+    section: 'analysis',
+    selector: '[data-tour="send-to-workspace"]',
+    title: 'Send a chart to your Workspace',
+    body: "Any chart with this button can be pinned to your Workspace — that's where you'll build the actual report. Let's go there now.",
+  },
+  {
+    section: 'workspace',
+    selector: '[data-tour="workspace-build"]',
+    title: "You're in the Workspace",
+    body: 'Charts you send here land on this board as cards. You can also build a new one from scratch with this button — no need to go back to Analysis.',
+  },
+  {
+    section: 'workspace',
+    selector: '[data-tour="workspace-note"]',
+    title: 'Stick a note next to it',
+    body: 'Add a note, then drag it right next to a chart — it snaps into place and stays linked, so your observation travels with the evidence.',
+  },
+  {
+    section: 'workspace',
+    selector: '[data-tour="workspace-canvas"]',
+    title: 'Move things around freely',
+    body: 'This whole board is yours to arrange — drag any chart or note anywhere to lay out your story the way you want it.',
+  },
+  {
+    section: 'workspace',
+    selector: '[data-tour="workspace-export"]',
+    title: 'Export when ready',
+    body: 'Export just the cards you select, or the whole board as one image — ready to drop into slides or a lab write-up.',
+  },
+];
+
 /** Client-side "current workspace" selection; the server has no notion of one. */
 const WORKSPACE_STORAGE_KEY = "airstory.currentWorkspaceId";
 /** Carries an invite token through the Firebase handshake (popup, refresh, log-in-then-accept). */
@@ -107,9 +171,7 @@ export default function App() {
   const [activeSection, setActiveSection] = useState(
     () => localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY) || "heatmap"
   );
-  // User menu (popup on the avatar). Holds account actions like My Page; more options to come.
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuRef = useRef(null);
+  const [showAnalysisTour, setShowAnalysisTour] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [isPublicMode] = useState(false); // Public mode is off when we have a landing/login
   const [workspaceId, setWorkspaceId] = useState("");
@@ -745,43 +807,6 @@ export default function App() {
     return "WS";
   };
 
-  // Avatar initials for the person, from the global account profile - the same in every workspace
-  // (owned or not). Falls back to the account name, then the per-workspace display name.
-  const accountInitials = () => {
-    const name = (accountProfile.display_name || account?.full_name || viewerProfile.displayName || "").trim();
-    const parts = name.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    }
-    if (parts.length === 1 && parts[0].length >= 2) {
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    if (parts.length === 1 && parts[0].length === 1) {
-      return `${parts[0]}•`.toUpperCase();
-    }
-    return "ME";
-  };
-
-  // Close the user-avatar popup on outside click or Escape.
-  useEffect(() => {
-    if (!userMenuOpen) return undefined;
-    const onPointerDown = (e) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
-        setUserMenuOpen(false);
-      }
-    };
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") setUserMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [userMenuOpen]);
-
-  // Note: "My Page" lives in the user-avatar popup (see below), not the top nav.
   const navItems = isTeacher
     ? [
         { id: 'manageclasses', label: 'Manage Classes', icon: Users },
@@ -821,16 +846,18 @@ export default function App() {
   }
 
   if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100"
-           style={{
-             backgroundImage: `radial-gradient(#cbd5e1 1px, transparent 1px)`,
-             backgroundSize: '24px 24px'
-           }}
-      >
-        <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600 sticky top-0 z-50" />
-        <main className="min-h-screen flex flex-col justify-center py-12">
-          {pendingInviteToken ? (
+    // The redesigned LandingPage owns its own full-bleed background/scroll layout,
+    // so give it the bare shell; InviteLanding still wants the original centered card.
+    if (pendingInviteToken) {
+      return (
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100"
+             style={{
+               backgroundImage: `radial-gradient(#cbd5e1 1px, transparent 1px)`,
+               backgroundSize: '24px 24px'
+             }}
+        >
+          <div className="w-full h-1.5 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600 sticky top-0 z-50" />
+          <main className="min-h-screen flex flex-col justify-center py-12">
             <InviteLanding
               token={pendingInviteToken}
               isLoggedIn={false}
@@ -841,19 +868,22 @@ export default function App() {
               authError={authError}
               authLoading={authLoading}
             />
-          ) : (
-            <LandingPage
-              onLogin={handleLogin}
-              onRegister={handleRegister}
-              onGoogleLogin={handleGoogleLogin}
-              authError={authError}
-              authLoading={authLoading}
-            />
-          )}
-        </main>
-        <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">
-          <p>Air Story • TAMGU LAB @TC</p>
-        </footer>
+          </main>
+          <footer className="py-8 text-center text-gray-400 text-sm font-bold uppercase tracking-widest">
+            <p>Air Story • TAMGU LAB @TC</p>
+          </footer>
+        </div>
+      );
+    }
+    return (
+      <div className="min-h-screen bg-canvas font-sans text-fg selection:bg-blue-100">
+        <LandingPage
+          onLogin={handleLogin}
+          onRegister={handleRegister}
+          onGoogleLogin={handleGoogleLogin}
+          authError={authError}
+          authLoading={authLoading}
+        />
       </div>
     );
   }
@@ -916,9 +946,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      {/* Slack-style vertical workspace switcher */}
+      {/* Vertical workspace switcher — quiet neutral rail, not a colorful SaaS-style dock. */}
       {!isPublicMode && memberships.length > 0 && (
-        <aside className="sticky top-0 h-screen w-20 shrink-0 bg-slate-900 flex flex-col items-center gap-3 py-4 overflow-y-auto z-50">
+        <aside className="sticky top-0 h-screen w-20 shrink-0 bg-canvas border-r border-hairline flex flex-col items-center gap-3 py-4 overflow-y-auto z-50">
           {memberships.map((m) => {
             const active = m.workspace_id === workspaceId;
             return (
@@ -949,10 +979,10 @@ export default function App() {
                 onBlur={() => setWorkspaceTooltip(null)}
               >
                 <span
-                  className={`flex items-center justify-center w-12 h-12 rounded-full text-sm font-bold transition-all ${
+                  className={`flex items-center justify-center w-11 h-11 rounded-full border text-small font-semibold transition-colors ${
                     active
-                      ? "bg-blue-600 text-white ring-2 ring-white shadow-lg"
-                      : "bg-slate-700 text-slate-100 hover:bg-blue-600"
+                      ? "bg-fg text-on-primary border-fg"
+                      : "bg-surface text-secondary border-hairline hover:border-fg hover:text-fg"
                   }`}
                 >
                   {workspaceIcon(m)}
@@ -966,7 +996,7 @@ export default function App() {
       {/* Sidebar hover tooltip — fixed so it escapes the rail's scroll clipping. */}
       {workspaceTooltip && (
         <span
-          className="pointer-events-none fixed z-[100] -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg"
+          className="pointer-events-none fixed z-[100] -translate-y-1/2 whitespace-nowrap rounded-ctrl bg-fg px-2.5 py-1 text-cap font-medium text-on-primary"
           style={{ top: workspaceTooltip.top, left: workspaceTooltip.left }}
         >
           {workspaceTooltip.name}
@@ -1012,8 +1042,39 @@ export default function App() {
               })}
             </div>
 
-            {/* Logout sits on the right; identity lives in the account menu below. */}
+            {/* Account cluster: click name/avatar for My Page; logout stays on the right. */}
             <div className="flex shrink-0 items-center gap-3 xl:gap-4">
+              {!isPublicMode && (
+                <button
+                  type="button"
+                  onClick={() => setActiveSection("mypage")}
+                  className={`flex shrink-0 items-center gap-3 rounded-lg px-2 py-1 -mx-2 transition-colors ${
+                    activeSection === "mypage" ? "bg-blue-50" : "hover:bg-gray-100"
+                  }`}
+                  title="My page"
+                >
+                  <div className="hidden min-w-[12rem] max-w-[16rem] text-right lg:block xl:max-w-[20rem] 2xl:max-w-[24rem]">
+                    <p className="truncate text-sm font-medium text-gray-900">
+                      {accountProfile.display_name || account?.full_name ||
+                        (isTeacher
+                          ? (viewerProfile.displayName || viewerProfile.instructor || "Instructor")
+                          : (viewerProfile.displayName || viewerProfile.studentId || filters.studentId || "Student"))}
+                    </p>
+                    <p
+                      className="truncate text-xs text-gray-500"
+                      title={viewerProfile.school || filters.school || undefined}
+                    >
+                      {viewerProfile.school || filters.school || "No school assigned"}
+                    </p>
+                    <p className="truncate text-[11px] text-gray-400">
+                      {isTeacher
+                        ? "Teacher Portal"
+                        : `Group ${(viewerProfile.group || filters.group || "").replace("G", "") || "—"}`}
+                    </p>
+                  </div>
+                  <Avatar size="sm" className="border-2 border-white shadow-md" />
+                </button>
+              )}
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg font-medium text-red-600 hover:bg-red-50 transition-all"
@@ -1023,64 +1084,6 @@ export default function App() {
                 <span className="hidden lg:inline">Logout</span>
               </button>
             </div>
-
-            {/* User menu — click the avatar to open a popup of account options. Hidden in public mode. */}
-            {!isPublicMode && (
-              <div className="relative" ref={userMenuRef}>
-                <button
-                  type="button"
-                  onClick={() => setUserMenuOpen((open) => !open)}
-                  className="flex items-center gap-3 rounded-full pl-2 pr-1 py-1 hover:bg-gray-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  aria-haspopup="menu"
-                  aria-expanded={userMenuOpen}
-                  aria-label="Account menu"
-                >
-                  <div className="text-right hidden lg:block">
-                    <p className="text-sm font-medium text-gray-900">
-                      {isTeacher ? (viewerProfile.instructor || "Instructor") : (viewerProfile.studentId || filters.studentId)}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {isTeacher
-                        ? `${viewerProfile.school || filters.school} • Teacher Portal`
-                        : `${viewerProfile.school || filters.school} - Group ${(viewerProfile.group || filters.group).replace('G', '')}`}
-                    </p>
-                  </div>
-                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center border-2 border-white shadow-md">
-                    <span className="text-white text-sm font-semibold">
-                      {accountInitials()}
-                    </span>
-                  </div>
-                  <ChevronDown
-                    className={`w-4 h-4 text-gray-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}
-                  />
-                </button>
-
-                {userMenuOpen && (
-                  <div
-                    role="menu"
-                    className="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 z-50 animate-fade-in"
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setActiveSection('mypage');
-                        setUserMenuOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium transition-colors ${
-                        activeSection === 'mypage'
-                          ? 'text-blue-600 bg-blue-50'
-                          : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      <User className="w-4 h-4" />
-                      My Page
-                    </button>
-                    {/* Future account options go here */}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       </nav>
@@ -1149,6 +1152,7 @@ export default function App() {
             classStructure={classStructure}
             onSendToWorkspace={handleAddWorkspaceItem}
             userRole={userRole}
+            onStartTour={() => setShowAnalysisTour(true)}
           />
         )}
         {activeSection === 'workspace' && (
@@ -1171,6 +1175,8 @@ export default function App() {
             account={account}
             profile={accountProfile}
             onProfileSaved={setAccountProfile}
+            switchWorkspace={switchWorkspace}
+            workspaceFullName={workspaceFullName}
           />
         )}
         {activeSection === 'manageclasses' && isTeacher && (
@@ -1187,6 +1193,16 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Spans Analysis + Workspace, so it has to live above both — otherwise it would
+          unmount the moment the tour switches sections. */}
+      <GuidedTour
+        steps={ANALYSIS_WORKSPACE_TOUR_STEPS}
+        open={showAnalysisTour}
+        onClose={() => setShowAnalysisTour(false)}
+        currentSection={activeSection}
+        onNavigate={setActiveSection}
+      />
 
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 mt-20">

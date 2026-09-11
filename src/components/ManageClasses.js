@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { GraduationCap, LockKeyhole, Trash2, MoveRight, X, Copy, Mail, Upload } from 'lucide-react';
+import { LockKeyhole, Trash2, MoveRight, X, Copy, Mail, Upload } from 'lucide-react';
 import {
   buildInviteLink,
   createInvitations,
@@ -16,17 +16,24 @@ import {
 import { getSchools } from '../api/schools';
 import { extractInviteEmails, parseInviteSpreadsheet } from '../utils/inviteSpreadsheet';
 import ConfirmDialog from './ConfirmDialog';
+import Button from './ui/Button';
+import Card from './ui/Card';
 import SchoolCombobox from './SchoolCombobox';
 
-/** Contact line for a roster member: email, else the student code they signed up with. */
+/** Prefer a full email; bare local-parts / codes get a clear no-domain label. */
 function formatMemberContact(m) {
-  return m?.email || m?.student_code || '-';
+  const email = String(m?.email || '').trim();
+  if (email.includes('@')) return email;
+  const code = String(m?.student_code || email || m?.username || '').trim();
+  if (!code) return '—';
+  return code.includes('@') ? code : `${code} (no domain)`;
 }
 
-/** A student is "assigned" only once they have both a period and a group; until then the
- *  roster and modal say Assign rather than Move. */
+/** A student is assigned only once they have both a period and a real group. */
 function needsGroupAssign(m) {
-  return !m?.period || !m?.group_code;
+  if (!m?.period) return true;
+  const g = String(m?.group_code || '').trim();
+  return !g || g === 'G?' || g === '?';
 }
 
 export default function ManageClasses({
@@ -468,163 +475,148 @@ export default function ManageClasses({
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-6 flex-wrap">
         <div>
-          <div className="flex items-center gap-2 mb-2">
-            <h1 className="text-3xl font-bold text-gray-900">Manage Classes</h1>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-page text-fg">Manage classes</h1>
             <button
               onClick={() => setShowHelp(true)}
-              className="flex items-center justify-center w-6 h-6 rounded-full border border-gray-300 text-gray-500 text-sm font-bold leading-none hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="flex items-center justify-center w-6 h-6 rounded-full border border-hairline text-muted text-cap font-bold leading-none hover:bg-canvas hover:text-fg transition-colors"
               title="Teacher workflow"
               aria-label="Teacher workflow help"
             >
               ?
             </button>
           </div>
-          <p className="text-gray-600">Teacher controls for groups, invitations, and student access</p>
+          <p className="text-small text-muted">Teacher controls for groups, invitations, and student access</p>
+        </div>
+        <div className="actions flex gap-2">
+          <Button size="sm" variant="neutral" onClick={() => setShowHelp(true)}>Class help</Button>
+          <Button size="sm" onClick={() => openInviteModal()}>Invite people</Button>
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-small text-aqi-unhealthy">{error}</p>}
 
       {/* Row 1: Class Overview (left) + Class Structure (right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       {/* Class Overview — current saved state (read-only) */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-              <GraduationCap className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Class Overview</h3>
-              <p className="text-xs text-gray-500">Current saved structure</p>
-            </div>
+      <Card>
+        <div className="flex items-start justify-between mb-1">
+          <div>
+            <h3 className="text-tile text-fg">Class overview</h3>
+            <p className="text-small text-muted mt-1">Current saved structure</p>
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          <div>
-            <p className="text-xs text-gray-500">School · Teacher</p>
-            {schoolEditing ? (
-              <div className="mt-1">
-                <SchoolCombobox
-                  id="school-input"
-                  value={schoolInput}
-                  onChange={(v) => { setSchoolInput(v); setSchoolError(''); }}
-                  options={schoolOptions.map((s) => s.name)}
-                  placeholder="Search or select a school"
-                  inputClassName="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                />
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveSchool}
-                    disabled={schoolBusy}
-                    className={`px-3 py-1.5 text-sm ${theme.bg} ${theme.hover} text-white font-medium rounded-lg transition-colors disabled:opacity-50`}
-                  >
-                    {schoolBusy ? 'Saving…' : 'Save'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setSchoolEditing(false); setSchoolError(''); }}
-                    disabled={schoolBusy}
-                    className="px-3 py-1.5 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 font-medium rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  {hasSchool && (
-                    <button
-                      type="button"
-                      onClick={handleRemoveSchool}
-                      disabled={schoolBusy}
-                      className="px-3 py-1.5 text-sm text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-medium rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
+        <div className="divide-y divide-hairline-soft mt-4">
+          <div className="flex items-start justify-between gap-4 py-3">
+            <p className="text-small text-muted">School · Teacher</p>
+            <div className="text-right min-w-0 max-w-[70%]">
+              {schoolEditing ? (
+                <div className="text-left">
+                  <SchoolCombobox
+                    id="school-input"
+                    value={schoolInput}
+                    onChange={(v) => { setSchoolInput(v); setSchoolError(''); }}
+                    options={schoolOptions.map((s) => s.name)}
+                    placeholder="Search or select a school"
+                    inputClassName="w-full px-3 py-2 border border-hairline rounded-ctrl bg-surface text-small text-fg"
+                  />
+                  <div className="flex flex-wrap justify-end gap-2 mt-2">
+                    <Button type="button" size="sm" variant="neutral" onClick={() => { setSchoolEditing(false); setSchoolError(''); }} disabled={schoolBusy}>
+                      Cancel
+                    </Button>
+                    {hasSchool && (
+                      <Button type="button" size="sm" variant="danger" onClick={handleRemoveSchool} disabled={schoolBusy}>
+                        Remove
+                      </Button>
+                    )}
+                    <Button type="button" size="sm" onClick={handleSaveSchool} disabled={schoolBusy}>
+                      {schoolBusy ? 'Saving…' : 'Save'}
+                    </Button>
+                  </div>
+                  {schoolError ? (
+                    <p className="text-cap text-aqi-unhealthy mt-1">{schoolError}</p>
+                  ) : (
+                    <p className="text-cap text-muted mt-1">
+                      Sets the school for this whole class — its members join the school workspace.
+                    </p>
                   )}
                 </div>
-                {schoolError ? (
-                  <p className="text-xs text-red-600 mt-1">{schoolError}</p>
-                ) : (
-                  <p className="text-xs text-gray-500 mt-1">
-                    Sets the school for this whole class — its members join the school workspace.
+              ) : (
+                <>
+                  <p className="text-small font-medium text-fg">
+                    {hasSchool ? viewerProfile.school : <span className="text-muted font-normal">Not set</span>}{' '}
+                    <button
+                      type="button"
+                      onClick={openSchoolEditor}
+                      className="text-small font-semibold text-link hover:underline"
+                    >
+                      (Edit)
+                    </button>
                   </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-lg font-bold text-gray-900">
-                {hasSchool ? viewerProfile.school : <span className="text-gray-400">Not set</span>}{' '}
-                <button
-                  type="button"
-                  onClick={openSchoolEditor}
-                  className="align-middle text-sm font-semibold text-blue-600 hover:text-blue-700 underline"
-                >
-                  (Edit)
-                </button>
-              </p>
-            )}
-            <p className="text-sm font-medium text-gray-600">{teacherName}</p>
+                  <p className="text-cap text-muted mt-0.5">{teacherName}</p>
+                </>
+              )}
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Periods</p>
-            <p className="text-lg font-bold text-gray-900">{savedPeriods.length}</p>
-            <p className="text-xs text-gray-400">{savedPeriods.join(', ') || '—'}</p>
+          <div className="flex items-center justify-between gap-4 py-3">
+            <p className="text-small text-muted">Periods</p>
+            <p className="text-small font-medium text-fg">{savedPeriods.join(', ') || '—'}</p>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Groups / period</p>
-            <p className="text-sm font-bold text-gray-900">
+          <div className="flex items-center justify-between gap-4 py-3">
+            <p className="text-small text-muted">Groups per period</p>
+            <p className="text-small font-medium text-fg">
               {savedPeriods.map((p) => `${p} · ${savedGroupCounts[p] || 0}`).join(', ') || '—'}
             </p>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Members joined</p>
-            <p className="text-lg font-bold text-gray-900">{studentMembers.length}</p>
+          <div className="flex items-center justify-between gap-4 py-3">
+            <p className="text-small text-muted">Members joined</p>
+            <p className="text-small font-medium text-fg">{studentMembers.length}</p>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Group coverage</p>
-            <p className={`text-lg font-bold ${coverageWarn ? 'text-amber-600' : 'text-green-700'}`}>
-              {coveredGroups} of {totalGroupSlots}
-            </p>
-            {coverageWarn && <p className="text-xs text-amber-600">Some groups have no account</p>}
+          <div className="flex items-start justify-between gap-4 py-3">
+            <p className="text-small text-muted">Group coverage</p>
+            <div className="text-right">
+              <p className={`text-small font-medium ${coverageWarn ? 'text-aqi-usg' : 'text-aqi-good'}`}>
+                {coveredGroups} of {totalGroupSlots}
+              </p>
+              {coverageWarn && <p className="text-cap text-muted mt-0.5">Some groups have no account</p>}
+            </div>
           </div>
         </div>
-      </div>
+      </Card>
 
         {/* Class Structure */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-              <GraduationCap className="w-5 h-5 text-white" />
-            </div>
-            <h3 className="text-xl font-bold text-gray-900">Class Structure</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Period count</label>
+        <Card>
+          <h3 className="text-tile text-fg">Class structure</h3>
+          <p className="text-small text-muted mt-1">Renaming a period updates its codes, roster, and groups when you save.</p>
+          <div className="grid grid-cols-2 gap-4 mt-5 mb-4">
+            <div className="field">
+              <label className="block text-small text-secondary mb-1.5">Period count</label>
               <input
                 type="number"
                 min={1}
                 max={12}
                 value={periodCount}
                 onChange={(e) => onPeriodCountChange(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                className="w-full h-11 px-4 border border-hairline rounded-ctrl bg-surface text-fg text-body focus:outline-none focus:border-link focus:ring-4 focus:ring-[rgba(0,102,204,0.15)]"
               />
             </div>
-            <div>
+            <div className="field">
               {/* Default reach for new uploads: 'school' (this school) or 'public' (everyone). */}
-              <label className="block text-xs text-gray-500 mb-1">Default visibility</label>
+              <label className="block text-small text-secondary mb-1.5">Default visibility</label>
               <select
                 value={defaultVisibility === 'group' ? 'school' : defaultVisibility}
                 onChange={(e) => setDefaultVisibility(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white"
+                className="w-full h-11 px-4 border border-hairline rounded-ctrl bg-surface text-fg text-body focus:outline-none focus:border-link focus:ring-4 focus:ring-[rgba(0,102,204,0.15)]"
               >
                 <option value="school">School only</option>
                 <option value="public">Public</option>
               </select>
             </div>
           </div>
-          <div className="mb-3">
-            <label className="block text-xs text-gray-500 mb-1">Periods &amp; groups (draft — editable names)</label>
+          <div className="mb-4">
+            <p className="text-small text-secondary mb-2">Periods &amp; groups <span className="text-muted">— draft, names are editable</span></p>
             <div className="space-y-2">
               {draftRows.map((row, i) => {
                 const active = i < Number(periodCount);
@@ -638,7 +630,7 @@ export default function ManageClasses({
                       value={row.name}
                       maxLength={6}
                       onChange={(e) => setDraftRows((prev) => prev.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
-                      className={`w-16 px-2 py-2 border rounded-lg text-sm ${active ? 'border-gray-300' : 'border-red-200 line-through text-gray-400'}`}
+                      className={`w-16 h-9 px-2 border rounded-ctrl text-small bg-surface text-fg ${active ? 'border-hairline' : 'border-aqi-unhealthy/40 line-through text-muted'}`}
                     />
                     <input
                       type="number"
@@ -647,103 +639,91 @@ export default function ManageClasses({
                       value={row.groups}
                       disabled={!active}
                       onChange={(e) => setDraftRows((prev) => prev.map((r, j) => (j === i ? { ...r, groups: e.target.value } : r)))}
-                      className="w-20 px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-50 disabled:text-gray-400"
+                      className="w-20 h-9 px-3 border border-hairline rounded-ctrl bg-surface text-fg disabled:bg-canvas disabled:text-muted"
                     />
-                    <span className="text-xs text-gray-500">groups</span>
-                    {!active && <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700">will remove</span>}
-                    {active && isNew && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">new · unsaved</span>}
-                    {active && !isNew && (isRenamed || isResized) && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">unsaved</span>}
+                    <span className="text-small text-muted">groups</span>
+                    {!active && <span className="text-cap px-1.5 py-0.5 rounded-pill bg-canvas text-aqi-unhealthy border border-hairline">will remove</span>}
+                    {active && isNew && <span className="text-cap px-1.5 py-0.5 rounded-pill bg-canvas text-aqi-usg border border-hairline">new · unsaved</span>}
+                    {active && !isNew && (isRenamed || isResized) && <span className="text-cap px-1.5 py-0.5 rounded-pill bg-canvas text-aqi-usg border border-hairline">unsaved</span>}
                   </div>
                 );
               })}
             </div>
-            <p className="text-xs text-gray-500 mt-2">Edit a period name to rename it — renames apply to codes, roster, and groups on save.</p>
             {/* TODO(backend): structure model needs a per-period list of { name, groupCount } with
                 rename support (renames propagate to members/codes). Propose in docs/openapi.yaml. */}
           </div>
-          <button
-            disabled={busy}
-            onClick={handleSaveClassStructure}
-            className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 disabled:opacity-60`}
-          >
-            Save Structure
-          </button>
-          <p className="text-xs text-gray-500 mt-3">
-            Invitation period options follow this structure. New uploads default to the selected visibility.
+          <Button disabled={busy} onClick={handleSaveClassStructure}>
+            Save structure
+          </Button>
+          <p className="text-small text-muted mt-3">
+            New uploads use the visibility selected here.
           </p>
-        </div>
+        </Card>
       </div>
 
       {/* Row 2: Invitations — full width */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-              <Mail className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Invitations</h3>
-              <p className="text-xs text-gray-500">
-                Invite students and co-teachers by email — each gets a personal join link to share with them.
-              </p>
-            </div>
+      <Card>
+        <div className="page__head flex flex-wrap items-start justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-tile text-fg">Invitations</h3>
+            <p className="text-small text-muted mt-1">
+              Each student or co-teacher gets a personal join link.
+            </p>
           </div>
-          <button
-            onClick={() => openInviteModal()}
-            className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm inline-flex items-center gap-2`}
-          >
+          <Button size="sm" variant="outline" onClick={() => openInviteModal()}>
             <Mail className="w-4 h-4" />
             Invite people
-          </button>
+          </Button>
         </div>
+        <div className="tablewrap border border-hairline-soft rounded-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-small">
             <thead>
-              <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                <th className="py-2 pr-4">Email</th>
-                <th className="py-2 pr-4">Name</th>
-                <th className="py-2 pr-4">Role</th>
-                <th className="py-2 pr-4">Placement</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Expires</th>
-                <th className="py-2 text-right">Actions</th>
+              <tr className="text-left text-cap font-semibold text-secondary bg-canvas">
+                <th className="py-3 px-3.5">Email</th>
+                <th className="py-3 px-3.5">Name</th>
+                <th className="py-3 px-3.5">Role</th>
+                <th className="py-3 px-3.5">Placement</th>
+                <th className="py-3 px-3.5">Status</th>
+                <th className="py-3 px-3.5">Expires</th>
+                <th className="py-3 px-3.5 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-hairline-soft">
               {invitations.map((inv) => {
                 const status = inviteStatus(inv);
                 const statusStyles = {
-                  pending: 'bg-blue-100 text-blue-700',
-                  accepted: 'bg-green-100 text-green-700',
-                  revoked: 'bg-gray-200 text-gray-600',
-                  expired: 'bg-amber-100 text-amber-700',
+                  pending: 'bg-canvas text-link border border-hairline',
+                  accepted: 'bg-canvas text-aqi-good border border-hairline',
+                  revoked: 'bg-canvas text-secondary border border-hairline',
+                  expired: 'bg-canvas text-aqi-usg border border-hairline',
                 };
                 return (
                   <tr key={inv.id}>
-                    <td className="py-3 pr-4 font-medium text-gray-900">{inv.email}</td>
-                    <td className="py-3 pr-4 text-gray-700">{inv.full_name || '—'}</td>
-                    <td className="py-3 pr-4 capitalize">{inv.role}</td>
-                    <td className="py-3 pr-4 whitespace-nowrap">
+                    <td className="py-3 px-3.5 font-medium text-fg">{inv.email}</td>
+                    <td className="py-3 px-3.5 text-secondary">{inv.full_name || '—'}</td>
+                    <td className="py-3 px-3.5 capitalize">{inv.role}</td>
+                    <td className="py-3 px-3.5 whitespace-nowrap">
                       {inv.period || inv.group_code
                         ? `${inv.period || 'P?'} · ${inv.group_code || 'G?'}`
                         : '—'}
                     </td>
-                    <td className="py-3 pr-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${statusStyles[status] || statusStyles.pending}`}>
+                    <td className="py-3 px-3.5">
+                      <span className={`tag inline-block px-2.5 py-0.5 text-cap rounded-pill ${statusStyles[status] || statusStyles.pending}`}>
                         {status}
                       </span>
                     </td>
-                    <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">
+                    <td className="py-3 px-3.5 text-muted whitespace-nowrap">
                       {inv.expires_at ? new Date(inv.expires_at).toLocaleDateString() : '—'}
                     </td>
-                    <td className="py-3">
+                    <td className="py-3 px-3.5">
                       <div className="flex items-center gap-1 justify-end">
                         {status === 'pending' && (
                           <>
                             <button
                               onClick={() => copyText(buildInviteLink(inv.token), inv.id)}
                               title="Copy invite link"
-                              className="px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                              className="px-2 py-1.5 rounded-pill text-cap border border-hairline text-link hover:bg-canvas inline-flex items-center gap-1"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedKey === inv.id ? 'Copied' : 'Copy link'}
@@ -751,7 +731,7 @@ export default function ManageClasses({
                             <button
                               onClick={() => setRevokeInviteTarget(inv)}
                               title="Revoke invitation"
-                              className="px-2 py-1.5 rounded text-xs bg-red-50 text-red-700 hover:bg-red-100 inline-flex items-center gap-1"
+                              className="px-2 py-1.5 rounded-pill text-cap border border-hairline text-aqi-unhealthy hover:bg-canvas inline-flex items-center gap-1"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                               Revoke
@@ -759,7 +739,7 @@ export default function ManageClasses({
                           </>
                         )}
                         {status === 'expired' && (
-                          <span className="text-xs text-gray-400">Re-invite to refresh the link</span>
+                          <span className="text-cap text-muted">Re-invite to refresh the link</span>
                         )}
                       </div>
                     </td>
@@ -768,134 +748,130 @@ export default function ManageClasses({
               })}
               {!invitations.length && (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-gray-400">
-                    No invitations yet — invite students or co-teachers above.
+                  <td colSpan={7} style={{ padding: 0 }}>
+                    <div className="empty border-0 rounded-none text-center py-9">
+                      <p className="text-small">Nobody is invited yet.</p>
+                      <Button size="sm" variant="outline" className="mt-3" onClick={() => openInviteModal()}>
+                        Invite your first student
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+        </div>
+      </Card>
 
       {/* Row 3: Class Roster — flat people list (actions live here) */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
+      <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-              <GraduationCap className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Class Roster</h3>
-              <p className="text-xs text-gray-500">Everyone who joined your workspace.</p>
-            </div>
+          <div>
+            <h3 className="text-tile text-fg">Class roster</h3>
+            <p className="text-small text-muted mt-1">Everyone who joined your workspace.</p>
           </div>
-          <button
-            onClick={() => openInviteModal()}
-            className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm inline-flex items-center gap-2`}
-          >
+          <Button size="sm" variant="outline" onClick={() => openInviteModal()}>
             <Mail className="w-4 h-4" />
             Invite student
-          </button>
+          </Button>
         </div>
+        <div className="tablewrap border border-hairline-soft rounded-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-small">
             <thead>
-              <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                <th className="py-2 pr-4">Name</th>
-                <th className="py-2 pr-4">Email</th>
-                <th className="py-2 pr-4">Group</th>
-                <th className="py-2 pr-4">Joined</th>
-                <th className="py-2 text-right">Actions</th>
+              <tr className="text-left text-cap font-semibold text-secondary bg-canvas">
+                <th className="py-3 px-3.5">Name</th>
+                <th className="py-3 px-3.5">Email</th>
+                <th className="py-3 px-3.5">Group</th>
+                <th className="py-3 px-3.5">Joined</th>
+                <th className="py-3 px-3.5 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-hairline-soft">
               {studentMembers.map((m) => {
                 const assignFirst = needsGroupAssign(m);
                 return (
                 <tr key={m.id}>
-                  <td className="py-3 pr-4 font-medium text-gray-900">
-                    {m.full_name ? m.full_name : <span className="text-gray-400 italic">{formatMemberContact(m)}</span>}
+                  <td className="py-3 px-3.5 font-medium text-fg">
+                    {m.full_name ? m.full_name : <span className="text-muted italic">{formatMemberContact(m)}</span>}
                   </td>
-                  <td className="py-3 pr-4 text-gray-600 font-mono text-xs" title={formatMemberContact(m)}>
+                  <td className="mono py-3 px-3.5 text-secondary text-xs" title={formatMemberContact(m)}>
                     {formatMemberContact(m)}
                   </td>
-                  <td className="py-3 pr-4 whitespace-nowrap">{m.period || 'P?'} · {m.group_code || 'G?'}</td>
-                  <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{m.joined_at}</td>
-                  <td className="py-3">
+                  <td className="py-3 px-3.5 whitespace-nowrap">{m.period || 'P?'} · {m.group_code || 'G?'}</td>
+                  <td className="py-3 px-3.5 text-muted whitespace-nowrap">{m.joined_at}</td>
+                  <td className="py-3 px-3.5">
                     <div className="flex items-center gap-1 justify-end">
-                      <button onClick={() => openStudentAction(m, 'password')} title="Reset password" className="px-2 py-1.5 rounded text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 inline-flex items-center gap-1"><LockKeyhole className="w-3.5 h-3.5" />PW</button>
+                      <button onClick={() => openStudentAction(m, 'password')} title="Reset password" className="px-2 py-1.5 rounded-pill text-cap border border-hairline text-aqi-usg hover:bg-canvas inline-flex items-center gap-1"><LockKeyhole className="w-3.5 h-3.5" />PW</button>
                       <button
                         onClick={() => openStudentAction(m, 'move')}
                         title={assignFirst ? 'Assign period/group' : 'Move period/group'}
-                        className="px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                        className="px-2 py-1.5 rounded-pill text-cap border border-hairline text-link hover:bg-canvas inline-flex items-center gap-1"
                       >
                         <MoveRight className="w-3.5 h-3.5" />
                         {assignFirst ? 'Assign' : 'Move'}
                       </button>
-                      <button onClick={() => setRemoveTarget(m)} title="Remove account" className="px-2 py-1.5 rounded text-xs bg-red-50 text-red-700 hover:bg-red-100 inline-flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />Remove</button>
+                      <button onClick={() => setRemoveTarget(m)} title="Remove account" className="px-2 py-1.5 rounded-pill text-cap border border-hairline text-aqi-unhealthy hover:bg-canvas inline-flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />Remove</button>
                     </div>
                   </td>
                 </tr>
                 );
               })}
               {studentMembers.length === 0 && (
-                <tr><td colSpan={5} className="py-6 text-center text-gray-400">No students yet — invite them by email.</td></tr>
+                <tr><td colSpan={5} className="py-6 text-center text-muted">No students yet — invite them by email.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+        </div>
+      </Card>
 
       {/* Row 4: Groups — composition & coverage (no member actions; those live in the Roster) */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
+      <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${theme.bg} rounded-lg flex items-center justify-center`}>
-              <GraduationCap className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Groups</h3>
-              <p className="text-xs text-gray-500">Coverage &amp; composition — drag a member chip to another group (same period) to move them.</p>
-            </div>
+          <div>
+            <h3 className="text-tile text-fg">Groups</h3>
+            <p className="text-small text-muted mt-1">Coverage &amp; composition — drag a member chip to another group (same period) to move them.</p>
           </div>
           <select
             value={rosterPeriod}
             onChange={(e) => setRosterPeriod(e.target.value)}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
+            className="sel-sm h-9 text-small border border-hairline rounded-ctrl bg-surface text-fg pl-3 pr-8"
           >
             <option value="all">All periods</option>
             {savedPeriods.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
+        <div className="tablewrap border border-hairline-soft rounded-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-small">
             <thead>
-              <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                <th className="py-2 pr-4">Group</th>
-                <th className="py-2 pr-4">Coverage</th>
-                <th className="py-2">Members</th>
+              <tr className="text-left text-cap font-semibold text-secondary bg-canvas">
+                <th className="py-3 px-3.5">Group</th>
+                <th className="py-3 px-3.5">Coverage</th>
+                <th className="py-3 px-3.5">Members</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-hairline-soft">
               {rosterRows.map(({ period, group, accts }) => (
                 <tr key={`${period}-${group}`} className="align-top">
-                  <td className="py-3 pr-4 whitespace-nowrap">
-                    <p className="font-semibold text-gray-900">{period} · {group}</p>
+                  <td className="py-3 px-3.5 whitespace-nowrap">
+                    <p className="font-semibold text-fg">{period} · {group}</p>
                     <button
                       onClick={() => onGroupSelect?.({ period, group })}
-                      className="text-xs text-blue-600 hover:text-blue-700"
+                      className="text-cap text-link hover:underline"
                     >
                       Open Raw Data →
                     </button>
                   </td>
-                  <td className="py-3 pr-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${accts.length === 0 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                  <td className="py-3 px-3.5 whitespace-nowrap">
+                    <span className={`tag inline-block px-2.5 py-0.5 text-cap rounded-pill border border-hairline ${accts.length === 0 ? 'text-aqi-usg' : 'text-aqi-good'}`}>
                       {accts.length === 0 ? 'No account' : `${accts.length} account${accts.length === 1 ? '' : 's'}`}
                     </span>
                   </td>
                   <td
-                    className={`py-3 rounded transition-colors ${dropTarget === `${period}-${group}` ? 'bg-blue-50 ring-1 ring-blue-300' : ''}`}
+                    className={`py-3 px-3.5 rounded-ctrl transition-colors ${dropTarget === `${period}-${group}` ? 'bg-canvas ring-1 ring-link' : ''}`}
                     onDragOver={(e) => { e.preventDefault(); setDropTarget(`${period}-${group}`); }}
                     onDragLeave={() => setDropTarget((t) => (t === `${period}-${group}` ? null : t))}
                     onDrop={() => handleGroupDrop(period, group)}
@@ -903,7 +879,7 @@ export default function ManageClasses({
                     {accts.length === 0 ? (
                       <button
                         onClick={() => openInviteModal({ period })}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-pill text-cap font-medium border border-hairline text-link hover:bg-canvas"
                       >
                         <Mail className="w-3.5 h-3.5" />
                         Invite
@@ -916,7 +892,7 @@ export default function ManageClasses({
                             draggable
                             onDragStart={() => setDragMember(a)}
                             onDragEnd={() => { setDragMember(null); setDropTarget(null); }}
-                            className="px-2 py-1 rounded bg-gray-100 text-gray-700 text-xs cursor-grab active:cursor-grabbing select-none"
+                            className="px-2 py-1 rounded-pill bg-canvas border border-hairline text-secondary text-cap cursor-grab active:cursor-grabbing select-none"
                             title="Drag to another group in the same period"
                           >
                             {a.full_name || formatMemberContact(a)}
@@ -930,27 +906,28 @@ export default function ManageClasses({
             </tbody>
           </table>
         </div>
-      </div>
+        </div>
+      </Card>
 
       {activeStudent && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !busy && setActiveStudent(null)}>
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="bg-surface rounded-card w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-hairline-soft flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-gray-900">
+                <h4 className="font-bold text-fg">
                   {activeAction === 'password' && 'Reset Password'}
                   {activeAction === 'move' && (needsGroupAssign(activeStudent) ? 'Assign Student' : 'Move Student')}
                   {activeAction === 'delete' && 'Remove Student'}
                 </h4>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted mt-1">
                   {activeStudent.full_name} • {formatMemberContact(activeStudent)}
                 </p>
               </div>
               <button
                 onClick={() => !busy && setActiveStudent(null)}
-                className="p-1.5 rounded-lg hover:bg-gray-100"
+                className="p-1.5 rounded-ctrl hover:bg-canvas"
               >
-                <X className="w-4 h-4 text-gray-500" />
+                <X className="w-4 h-4 text-muted" />
               </button>
             </div>
             <div className="p-5">
@@ -961,21 +938,17 @@ export default function ManageClasses({
                     value={draftPassword}
                     onChange={(e) => setDraftPassword(e.target.value)}
                     placeholder="New password (8+ chars)"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    className="w-full px-3 py-2 border border-hairline rounded-ctrl text-sm"
                   />
-                  <button
-                    disabled={busy || draftPassword.length < 8}
-                    onClick={() => handleResetPassword(activeStudent)}
-                      className="px-3 py-1.5 rounded text-sm bg-amber-50 text-amber-700 hover:bg-amber-100"
-                    >
-                    Apply Password
-                  </button>
+                  <Button size="sm" variant="neutral" disabled={busy || draftPassword.length < 8} onClick={() => handleResetPassword(activeStudent)}>
+                    Apply password
+                  </Button>
                 </div>
               )}
               {activeAction === 'move' && (
                 <div className="space-y-3">
                   {needsGroupAssign(activeStudent) && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                    <p className="text-xs text-aqi-usg bg-canvas border border-hairline rounded-ctrl px-3 py-2">
                       This student has no group yet — pick a period and group to assign them.
                     </p>
                   )}
@@ -983,39 +956,31 @@ export default function ManageClasses({
                     <select
                       value={draftPeriod}
                       onChange={(e) => setDraftPeriod(e.target.value)}
-                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      className="px-3 py-2 border border-hairline rounded-ctrl text-sm"
                     >
                       {savedPeriods.map((p) => <option key={p} value={p}>{p}</option>)}
                     </select>
                     <select
                       value={draftGroup}
                       onChange={(e) => setDraftGroup(e.target.value)}
-                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      className="px-3 py-2 border border-hairline rounded-ctrl text-sm"
                     >
                       {groupsFor(draftPeriod).map((g) => <option key={g} value={g}>{g}</option>)}
                     </select>
                   </div>
-                  <button
-                    disabled={busy}
-                    onClick={handleMoveStudent}
-                    className="px-3 py-1.5 rounded text-sm bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  >
-                    {needsGroupAssign(activeStudent) ? 'Assign Student' : 'Move Student'}
-                  </button>
+                  <Button size="sm" disabled={busy} onClick={handleMoveStudent}>
+                    {needsGroupAssign(activeStudent) ? 'Assign student' : 'Move student'}
+                  </Button>
                 </div>
               )}
               {activeAction === 'delete' && (
                 <div className="space-y-3">
-                  <p className="text-sm text-gray-700">
+                  <p className="text-sm text-secondary">
                     Remove this student from the class roster?
                   </p>
-                  <button
-                    disabled={busy}
-                    onClick={handleRemoveStudent}
-                    className="px-3 py-1.5 rounded text-sm bg-red-50 text-red-700 hover:bg-red-100"
-                  >
-                    Remove Student
-                  </button>
+                  <Button size="sm" variant="danger" disabled={busy} onClick={handleRemoveStudent}>
+                    Remove student
+                  </Button>
                 </div>
               )}
             </div>
@@ -1026,11 +991,11 @@ export default function ManageClasses({
       {/* Invite people modal — creates invitations and shows the personal join links to share */}
       {inviteOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !inviteBusy && setInviteOpen(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h4 className="font-bold text-gray-900">Invite people</h4>
-              <button onClick={() => !inviteBusy && setInviteOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100">
-                <X className="w-4 h-4 text-gray-500" />
+          <div className="bg-surface rounded-card w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-hairline-soft flex items-center justify-between">
+              <h4 className="font-bold text-fg">Invite people</h4>
+              <button onClick={() => !inviteBusy && setInviteOpen(false)} className="p-1.5 rounded-ctrl hover:bg-canvas">
+                <X className="w-4 h-4 text-muted" />
               </button>
             </div>
             <div className="p-5 space-y-3">
@@ -1038,19 +1003,19 @@ export default function ManageClasses({
                 <>
                   {(inviteResult.invitations || []).length > 0 && (
                     <>
-                      <p className="text-sm text-green-700">
+                      <p className="text-sm text-aqi-good">
                         Created {inviteResult.invitations.length} invitation{inviteResult.invitations.length === 1 ? '' : 's'}. Share each link with its invitee:
                       </p>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
                         {inviteResult.invitations.map((inv) => (
-                          <div key={inv.id} className="flex items-center justify-between gap-2 p-2 bg-gray-50 rounded-lg">
+                          <div key={inv.id} className="flex items-center justify-between gap-2 p-2 bg-canvas rounded-ctrl">
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate">{inv.email}</p>
-                              <p className="text-xs text-gray-500 truncate font-mono">{buildInviteLink(inv.token)}</p>
+                              <p className="text-sm font-medium text-fg truncate">{inv.email}</p>
+                              <p className="text-xs text-muted truncate font-mono">{buildInviteLink(inv.token)}</p>
                             </div>
                             <button
                               onClick={() => copyText(buildInviteLink(inv.token), `modal-${inv.id}`)}
-                              className="shrink-0 px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                              className="shrink-0 px-2 py-1.5 rounded-pill text-cap border border-hairline text-link hover:bg-canvas inline-flex items-center gap-1"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedKey === `modal-${inv.id}` ? 'Copied' : 'Copy'}
@@ -1061,7 +1026,7 @@ export default function ManageClasses({
                     </>
                   )}
                   {(inviteResult.skipped || []).length > 0 && (
-                    <p className="text-xs text-amber-700">
+                    <p className="text-xs text-aqi-usg">
                       Skipped (already a member): {inviteResult.skipped.map((s) => s.email).join(', ')}
                     </p>
                   )}
@@ -1071,14 +1036,14 @@ export default function ManageClasses({
                       setInviteEmails('');
                       setInvitePlacements({});
                     }}
-                    className="text-sm text-blue-600 hover:text-blue-700 font-semibold"
+                    className="text-sm text-link hover:text-link font-semibold"
                   >
                     Invite more people
                   </button>
                 </>
               ) : (
                 <>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted">
                     Upload a CSV — the first header row (<span className="font-mono">name, email, period, group</span>)
                     is skipped automatically. Names pre-fill on the student join page; period/group assign on accept.
                   </p>
@@ -1087,16 +1052,16 @@ export default function ManageClasses({
                     onChange={(e) => setInviteEmails(e.target.value)}
                     rows={3}
                     placeholder="student@example.com, student2@example.com"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    className="w-full px-3 py-2 border border-hairline rounded-ctrl text-sm"
                   />
                   {Object.keys(invitePlacements).length > 0 && (
-                    <p className="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                    <p className="text-xs text-aqi-good bg-canvas border border-hairline rounded-ctrl px-3 py-2">
                       Spreadsheet loaded for {Object.keys(invitePlacements).length} student
                       {Object.keys(invitePlacements).length === 1 ? '' : 's'}
                       {' '}(name / period / group pre-filled where provided).
                     </p>
                   )}
-                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 cursor-pointer w-fit">
+                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-ctrl text-xs font-medium bg-canvas text-secondary border border-hairline-soft hover:bg-canvas cursor-pointer w-fit">
                     <Upload className="w-3.5 h-3.5" />
                     Upload spreadsheet / CSV
                     <input
@@ -1112,11 +1077,11 @@ export default function ManageClasses({
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Role</label>
+                      <label className="block text-xs text-muted mb-1">Role</label>
                       <select
                         value={inviteRole}
                         onChange={(e) => setInviteRole(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                        className="w-full px-3 py-2 border border-hairline rounded-ctrl text-sm bg-surface"
                       >
                         <option value="student">Student</option>
                         <option value="teacher">Teacher</option>
@@ -1124,11 +1089,11 @@ export default function ManageClasses({
                     </div>
                     {inviteRole === 'student' && (
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">Default period (optional)</label>
+                        <label className="block text-xs text-muted mb-1">Default period (optional)</label>
                         <select
                           value={invitePeriod}
                           onChange={(e) => setInvitePeriod(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                          className="w-full px-3 py-2 border border-hairline rounded-ctrl text-sm bg-surface"
                         >
                           <option value="">Assign later</option>
                           {savedPeriods.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -1136,13 +1101,9 @@ export default function ManageClasses({
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={handleInvite}
-                    disabled={inviteBusy}
-                    className={`${theme.bg} ${theme.hover} text-white rounded-lg px-4 py-2 text-sm disabled:opacity-60`}
-                  >
+                  <Button onClick={handleInvite} disabled={inviteBusy}>
                     {inviteBusy ? 'Creating…' : 'Create invitations'}
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
@@ -1153,23 +1114,23 @@ export default function ManageClasses({
       {/* Section 6: Teacher Workflow help (behind the ? icon by the title) */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowHelp(false)}>
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className={`${theme.bg} text-white p-5 rounded-t-2xl flex items-center justify-between`}>
-              <h3 className="text-lg font-bold">Teacher Workflow</h3>
-              <button onClick={() => setShowHelp(false)} className="p-1 hover:bg-white/20 rounded-lg">
-                <X className="w-5 h-5" />
+          <div className="bg-surface rounded-card max-w-lg w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b border-hairline-soft p-5 flex items-center justify-between">
+              <h3 className="text-tile text-fg">Teacher workflow</h3>
+              <button onClick={() => setShowHelp(false)} className="p-1 hover:bg-canvas rounded-ctrl">
+                <X className="w-5 h-5 text-secondary" />
               </button>
             </div>
-            <ul className="p-6 text-sm text-gray-700 space-y-2 list-disc ml-4">
+            <ul className="p-6 text-small text-secondary space-y-2 list-disc ml-4">
               <li>Invite students and co-teachers by email — share each personal join link from the Invitations section.</li>
               <li>Open a group&apos;s Raw Data from the Groups section; manage individual members in the Roster.</li>
               <li>Reset student passwords when needed (teacher support flow).</li>
               <li>Use period/group selections here to drive Raw Data and Analysis comparisons.</li>
             </ul>
             <div className="p-6 pt-0">
-              <button onClick={() => setShowHelp(false)} className={`${theme.bg} ${theme.hover} w-full py-3 text-white font-semibold rounded-lg`}>
+              <Button wide onClick={() => setShowHelp(false)}>
                 Got it
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -1177,17 +1138,17 @@ export default function ManageClasses({
 
       {/* Refinement 3: move toast with Undo */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-gray-900 text-white px-4 py-3 rounded-lg shadow-xl flex items-center gap-3 max-w-[90vw]">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-fg text-white px-4 py-3 rounded-ctrl shadow-xl flex items-center gap-3 max-w-[90vw]">
           <span className="text-sm">{toast.message}</span>
           {toast.undo && (
             <button
               onClick={() => { toast.undo(); setToast(null); }}
-              className="text-sm font-semibold text-blue-300 hover:text-blue-200"
+              className="text-sm font-semibold text-link-dark hover:opacity-85"
             >
               Undo
             </button>
           )}
-          <button onClick={() => setToast(null)} className="text-gray-400 hover:text-white" aria-label="Dismiss">
+          <button onClick={() => setToast(null)} className="text-muted hover:text-white" aria-label="Dismiss">
             <X className="w-4 h-4" />
           </button>
         </div>

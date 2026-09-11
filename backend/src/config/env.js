@@ -14,7 +14,12 @@ function parseOriginList(raw) {
  * Comma-separated FRONTEND_URL(s), e.g. "https://user.github.io,https://app.vercel.app"
  * Local dev hosts are always appended so local UI can hit prod API when needed.
  */
-const localhostOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
+// CRA falls back to 3001/3002/... when 3000 is already taken locally, so allow a
+// small range rather than hardcoding just 3000.
+const localhostOrigins = [3000, 3001, 3002, 3003].flatMap((port) => [
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`,
+]);
 const configuredOrigins = parseOriginList(process.env.FRONTEND_URL);
 export const frontendOrigins = [...new Set([...configuredOrigins, ...localhostOrigins])];
 

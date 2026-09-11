@@ -27,7 +27,7 @@ You will have **three URLs**:
 
 **Migrations (free tier):** `preDeployCommand` is **not supported** on Render’s free web services. After the first successful API deploy, open the Web Service → **Shell** and run **`npm run db:migrate`** once (safe to repeat). Paid plans can use `preDeployCommand` in `render.yaml` if you add it back.
 
-**“SSL/TLS required” when migrating from your laptop:** Render’s Postgres expects TLS. The app’s `backend/src/db/pool.js` enables SSL for non-localhost URLs. Pull latest `main`, then run `npm run db:migrate` again. You can also append `?sslmode=require` to the **External** connection string if your client needs it.
+**“SSL/TLS required” when migrating from your laptop:** Render’s Postgres expects TLS. The app’s `backend/src/db/pool.js` enables SSL for non-localhost URLs. Pull latest `main`, then run `npm run db:migrate && npm run db:reference` again. You can also append `?sslmode=require` to the **External** connection string if your client needs it.
 
 **Optional demo data** (demo environments only): Web Service → **Shell**, run:
 

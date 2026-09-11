@@ -1,0 +1,893 @@
+/* ============================================================
+   AirStory — Interactive sensor explorer
+   Ported from the design mockup (airstory_v2), restructured.
+
+   NOTE ON LAYOUT: the original mockup had THREE generations of
+   layout fixes stacked on top of each other for this section —
+   a fixed aspect-ratio, then a min-height:560px !important patch,
+   then a runtime JS script that re-parented DOM nodes to try a
+   different layout. That's why it didn't reliably fit on one
+   screen. This is a single clean version: the SVG's height is
+   capped relative to the viewport (see .abc-visual > svg below),
+   so the diagram never grows taller than the available space.
+   ============================================================ */
+
+#abc-root {
+  font-family: inherit;
+}
+
+/* Sensor stage + the "take it for a walk" card sit side by side. */
+#abc-grid.sensor-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  #abc-grid.sensor-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sensor-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Stage: one shared frame holding the device viewer + info panel */
+#abc-stage {
+  position: relative;
+  min-height: 610px;
+  background: linear-gradient(180deg, #f5f5f7 0%, #eeeef2 100%);
+  border-radius: var(--r-card);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  padding: 28px 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 10px;
+  align-items: stretch;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  #abc-stage {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 20px;
+  }
+}
+
+.abc-visual {
+  position: relative;
+  min-width: 0;
+  min-height: 550px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+@media (max-width: 900px) {
+  .abc-visual {
+    min-height: 430px;
+  }
+}
+
+/* The actual fix: bound the diagram's height to the viewport, not a fixed px */
+.abc-visual > svg {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  max-height: 520px;
+  transform: translateX(-1.5%);
+  transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.35s ease;
+}
+#abc-root.has-active .abc-visual > svg {
+  transform: translateX(-3%);
+}
+@media (max-width: 900px) {
+  .abc-visual > svg {
+    max-height: 420px;
+    transform: none;
+  }
+}
+
+/* Cutaway takes the full stage — the narrative panel isn't relevant inside the part. */
+#abc-root.cutaway-active #abc-stage {
+  grid-template-columns: 1fr;
+}
+#abc-root.cutaway-active #abc-panel {
+  display: none;
+}
+#abc-root.cutaway-active .abc-visual > svg {
+  max-width: 900px;
+  transform: none;
+}
+
+/* Top control bar */
+.abc-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+#abc-mode-pill {
+  font-size: 11px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border-radius: 999px;
+  color: #6e6e73;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.abc-controls-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+#abc-btn-back {
+  pointer-events: auto;
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  color: #1d1d1f;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.15s ease;
+}
+#abc-btn-back:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
+#abc-btn-air {
+  position: relative;
+  pointer-events: auto;
+  font-size: 12px;
+  padding: 7px 13px;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  color: #1d1d1f;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  transition: background 0.15s ease;
+}
+#abc-btn-air:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
+/* One-time cutaway nudge: quietly draws attention to Show airflow, then disappears. */
+#abc-btn-air.airflow-nudge {
+  animation: airflow-nudge-pulse 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) 2;
+}
+#abc-btn-air.airflow-nudge::after {
+  content: "See the air move";
+  position: absolute;
+  right: 0;
+  top: calc(100% + 9px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  color: #515154;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: airflow-nudge-label 3.9s ease forwards;
+}
+@keyframes airflow-nudge-pulse {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: 0 0 0 5px rgba(0, 113, 227, 0.12); }
+}
+@keyframes airflow-nudge-label {
+  0% { opacity: 0; transform: translateY(-4px); }
+  12%, 72% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-2px); }
+}
+
+#abc-air-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c7c7cc;
+  display: inline-block;
+  transition: background 0.2s;
+}
+
+/* Bottom hint */
+#abc-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: #6e6e73;
+  pointer-events: none;
+}
+
+/* Narrative occupies negative space next to the diagram rather than a documentation card.
+   It's always present (a short credit line by default) so this side of the stage never
+   reads as empty, then swaps to the selected part's story once one is chosen. */
+#abc-panel {
+  align-self: center;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 28px 18px 28px 10px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 900px) {
+  #abc-panel {
+    padding: 2px 12px 18px;
+    max-width: 620px;
+  }
+}
+
+/* Default state: a short, quiet credit line — same typographic scale as the selected-part
+   story below, so the panel never feels blank before a part is picked. */
+#abc-default {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: abc-panel-fade 0.32s ease;
+}
+#abc-default-badge {
+  align-self: flex-start;
+  color: #6e6e73;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
+#abc-default-title {
+  font-size: 28px;
+  line-height: 32px;
+  letter-spacing: -0.5px;
+  font-weight: 600;
+  color: #1d1d1f;
+  max-width: 280px;
+}
+#abc-default-body {
+  font-size: 15px;
+  line-height: 22px;
+  color: #6e6e73;
+  max-width: 280px;
+}
+@keyframes abc-panel-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #abc-default {
+    animation: none;
+  }
+}
+
+#abc-detail {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  animation: abc-panel-fade 0.32s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  #abc-detail {
+    animation: none;
+  }
+}
+
+#abc-badge {
+  align-self: flex-start;
+  padding: 0;
+  background: transparent;
+  color: #6e6e73;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
+
+#abc-title {
+  font-size: 32px;
+  line-height: 35px;
+  letter-spacing: -0.65px;
+  font-weight: 600;
+  color: #1d1d1f;
+  max-width: 290px;
+}
+#abc-title .abc-subtitle {
+  display: none;
+}
+@media (max-width: 900px) {
+  #abc-title {
+    font-size: 28px;
+    line-height: 32px;
+    max-width: 620px;
+  }
+}
+
+#abc-what {
+  font-size: 17px;
+  line-height: 25px;
+  letter-spacing: -0.374px;
+  color: #515154;
+  max-width: 292px;
+}
+@media (max-width: 900px) {
+  #abc-what {
+    max-width: 620px;
+  }
+}
+
+.abc-how-label {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  color: #6e6e73;
+  margin-bottom: 5px;
+  font-weight: 600;
+}
+#abc-how {
+  font-size: 14px;
+  line-height: 20px;
+  color: #6e6e73;
+  max-width: 292px;
+}
+@media (max-width: 900px) {
+  #abc-how {
+    max-width: 620px;
+  }
+}
+
+#abc-askmore {
+  margin-top: 8px;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--link);
+  font-size: 17px;
+  line-height: 25px;
+  cursor: pointer;
+  font-weight: 400;
+  font-family: inherit;
+}
+#abc-askmore:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+
+/* Identification is lightweight: no yellow glow, no card, no instruction chrome.
+   Selecting a part gently scales it up; everything else steps back. */
+#abc-root .abc-part .glow-target {
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease;
+  transform-box: fill-box;
+}
+#abc-root .abc-part.active .glow-target {
+  transform: scale(1.012);
+}
+#abc-root .abc-part {
+  transition: opacity 0.25s ease;
+  cursor: pointer;
+}
+#abc-root.has-active .abc-part:not(.active):not([data-id="pcb"]):not([data-id="case"]) {
+  opacity: 0.2;
+}
+#abc-root.has-active .abc-part[data-id="pcb"]:not(.active) {
+  opacity: 0.36;
+}
+#abc-root.has-active .abc-part[data-id="case"]:not(.active) {
+  opacity: 0.24;
+}
+#abc-root .abc-part:hover {
+  opacity: 1 !important;
+}
+
+/* Same "what's next" nudge as the sim card, aimed at the PM 2.5 sensor itself — a soft
+   glow pulse rather than a label, since the part already has its own hover tooltip. */
+#abc-root .abc-part[data-id="pm25"].next-step-nudge .glow-target {
+  animation: next-step-glow 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) 2;
+}
+@keyframes next-step-glow {
+  0%, 100% { filter: none; }
+  50% { filter: drop-shadow(0 0 9px rgba(0, 113, 227, 0.6)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #abc-root .abc-part[data-id="pm25"].next-step-nudge .glow-target {
+    animation: none;
+  }
+}
+
+/* Lightweight hover identification — a tooltip that follows the cursor, no panel change. */
+.abc-part-tooltip {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -8px);
+  transition: opacity 0.14s ease, transform 0.18s ease;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  color: #1d1d1f;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.abc-part-tooltip.on {
+  opacity: 1;
+  transform: translate(-50%, -14px);
+}
+
+/* LED halo pulse */
+@keyframes led-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.85; }
+}
+#abc-root .led-halo {
+  opacity: 0.55;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+#abc-root.airflow-on .led-halo {
+  animation: led-pulse 2.2s ease-in-out infinite;
+}
+#abc-root.airflow-on .led-halo:nth-of-type(2) { animation-delay: 0.3s; }
+#abc-root.airflow-on .led-halo:nth-of-type(3) { animation-delay: 0.6s; }
+#abc-root.airflow-on .led-halo:nth-of-type(4) { animation-delay: 0.9s; }
+
+/* Fan spin */
+@keyframes fan-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+#fan-blades.spinning > g {
+  animation: fan-spin 0.4s linear infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+/* Laser */
+@keyframes laser-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+#laser-beam.on {
+  animation: laser-pulse 1.5s ease-in-out infinite;
+}
+
+/* Scatter flash */
+@keyframes scatter-flash {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  100% { opacity: 0; }
+}
+#scatter-point.flash {
+  animation: scatter-flash 0.6s ease-out;
+}
+#photodiode-glow {
+  transition: opacity 0.12s ease-out;
+}
+
+/* The SVG "Look inside" callout is replaced by the narrative panel's text action
+   (#abc-askmore reads "Look inside →" while the PM 2.5 sensor is selected). */
+#abc-look-inside {
+  display: none !important;
+}
+
+/* Wind particles (top-view airflow) */
+#abc-root .wind path {
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+#abc-root.airflow-on .wind path {
+  opacity: 1;
+  animation: drift linear infinite;
+}
+@keyframes drift {
+  to { stroke-dashoffset: -140; }
+}
+
+/* Section chrome */
+.device-section {
+  background: linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%);
+  border-top: 1px solid var(--hairline);
+  padding: 64px 0 80px;
+}
+.device-wide {
+  max-width: 1340px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.scrollcue {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 40px;
+}
+.scrollcue button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 12px 24px;
+  border-radius: var(--r-card);
+}
+.scrollcue button:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+.cue-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cue-label {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  color: var(--fg);
+}
+.cue-arrow {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  display: grid;
+  place-items: center;
+  color: var(--fg);
+  animation: nudge 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.scrollcue button:hover .cue-arrow {
+  border-color: var(--fg);
+}
+@keyframes nudge {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(8px); }
+}
+
+/* ============================================================
+   "Take the sensor for a walk" — progressive-disclosure card.
+   Scoped under #sim-block since it uses short generic-looking
+   class names (.t-small, .muted, .btn) that shouldn't leak into
+   the rest of the app's global stylesheet.
+   ============================================================ */
+#sim-block .simcard {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--r-card);
+  padding: 18px 20px;
+}
+
+/* One-time "what's next" nudge: airflow is on but neither the walk scenario nor the
+   Plantower cutaway has been tried yet — gently point at both entry points. Mirrors
+   the #abc-btn-air.airflow-nudge treatment above so the two guides feel like one system. */
+#sim-block .simcard.next-step-nudge {
+  animation: next-step-card-pulse 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) 2;
+}
+#sim-block .simcard.next-step-nudge::after {
+  content: "Try this next";
+  position: absolute;
+  top: -13px;
+  right: 16px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  color: #515154;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: airflow-nudge-label 3.9s ease forwards;
+}
+@keyframes next-step-card-pulse {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: 0 0 0 5px rgba(0, 113, 227, 0.14); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #sim-block .simcard.next-step-nudge,
+  #sim-block .simcard.next-step-nudge::after {
+    animation: none;
+  }
+}
+
+#sim-block .t-small {
+  font-size: 14px;
+  line-height: 20px;
+}
+#sim-block .t-cap {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#sim-block .muted {
+  color: var(--muted);
+}
+
+#sim-block .sim-gate-copy {
+  margin: 4px 0 16px;
+  line-height: 19px;
+  color: var(--muted);
+}
+#sim-block .sim-start {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--link);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+#sim-block .sim-start:hover {
+  text-decoration: underline;
+}
+#sim-block .sim-start span {
+  transition: transform 0.2s ease;
+}
+#sim-block .sim-start:hover span {
+  transform: translateX(2px);
+}
+
+#sim-block .sim-story {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  overflow: hidden;
+  transition: grid-template-rows 0.42s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.28s ease;
+}
+#sim-block .sim-story > * {
+  min-height: 0;
+}
+#sim-block .simcard.is-ready .sim-gate {
+  display: none;
+}
+#sim-block .simcard.is-ready .sim-story {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  overflow: visible;
+}
+#sim-block .sim-ready-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--secondary);
+  margin-bottom: 5px;
+}
+#sim-block .sim-ready-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 0 4px rgba(46, 158, 91, 0.09);
+}
+#sim-block .sim-next {
+  margin: 0 0 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* The walk is one story card: the selected stop expands in place instead of
+   spawning a second widget. */
+#sim-block .stops {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#sim-block .stops button {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.22s ease;
+}
+#sim-block .stops button:hover {
+  background: var(--canvas);
+}
+#sim-block .stops button.on {
+  background: var(--canvas);
+}
+#sim-block .stop-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+}
+#sim-block .s-name {
+  font-size: 14px;
+  letter-spacing: -0.224px;
+  color: var(--secondary);
+}
+#sim-block .stops button.on .s-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+#sim-block .s-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: #ebebf0;
+  overflow: hidden;
+}
+#sim-block .s-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#sim-block .s-val {
+  font-size: 13px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+#sim-block .stops button.on .s-val {
+  color: var(--fg);
+  font-weight: 600;
+}
+#sim-block .stop-detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.32s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s ease;
+}
+#sim-block .stop-detail-inner {
+  overflow: hidden;
+  padding: 0 10px;
+}
+#sim-block .stops button.on .stop-detail {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+#sim-block .stops button.on .stop-detail-inner {
+  padding: 2px 10px 13px;
+}
+#sim-block .stop-reading {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+#sim-block .stop-reading strong {
+  font-size: 24px;
+  line-height: 28px;
+  letter-spacing: -0.35px;
+  font-weight: 600;
+  color: var(--fg);
+}
+#sim-block .stop-reading .unit {
+  font-size: 12px;
+  color: var(--muted);
+}
+#sim-block .stop-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--secondary);
+}
+#sim-block .stop-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+#sim-block .stop-note {
+  display: block;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--secondary);
+  max-width: 260px;
+}
+#sim-block .stop-src {
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--muted);
+  max-width: 260px;
+}
+#sim-block .epaline {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  padding-left: 10px;
+}
+#sim-block .epaline span:first-child {
+  flex: 0 0 34px;
+  height: 0;
+  border-top: 1px dashed var(--usg);
+}
+
+/* Small outline button — scoped copy of the app's button styling for this card only. */
+#sim-block .btn {
+  font-family: inherit;
+  cursor: pointer;
+}
+#sim-block .btn--sm {
+  font-size: 13px;
+  padding: 9px 14px;
+}
+#sim-block .btn--outline {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  color: var(--fg);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+#sim-block .btn--outline:hover {
+  background: var(--canvas);
+  border-color: var(--secondary);
+}
+#sim-block .btn--wide {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #abc-root * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

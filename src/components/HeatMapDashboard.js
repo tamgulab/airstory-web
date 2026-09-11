@@ -11,6 +11,7 @@ import { apiRequest } from '../api/http';
 import { AQI_RANGES, getColorForValue, getStatusLabel } from '../utils/airQuality';
 import { buildTeamTrailSegments, preferPointsNearSchool } from '../utils/trails';
 import { resolveDirectorySchool, schoolLabelsMatch, shortLabelFromSchoolName } from '../utils/schoolLabels';
+import Button from './ui/Button';
 
 const MAP_STYLE_URL =
   process.env.REACT_APP_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
@@ -73,29 +74,29 @@ const StatusInfoModal = ({ isOpen, onClose, theme }) => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className={`${theme.bg} text-white p-6 rounded-t-2xl`}>
-          <h3 className="text-xl font-bold">Air Quality Index (AQI) Criteria</h3>
-          <p className="text-sm opacity-90 mt-1">Understanding air quality status levels for PM 2.5</p>
+      <div className="bg-surface rounded-card max-w-2xl w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="p-6 border-b border-hairline-soft">
+          <h3 className="text-tile text-fg">Air Quality Index (AQI) criteria</h3>
+          <p className="text-small text-muted mt-1">Understanding air quality status levels for PM 2.5</p>
         </div>
         <div className="p-6">
           <div className="space-y-4">
             {AQI_RANGES.pm25.slice(0, -1).map((range, idx) => {
               const prevMax = idx > 0 ? AQI_RANGES.pm25[idx - 1].max : 0;
               return (
-                <div key={idx} className="flex items-start gap-4 p-4 rounded-lg border border-gray-200">
+                <div key={idx} className="flex items-start gap-4 p-4 rounded-ctrl border border-hairline-soft">
                   <div 
-                    className="w-12 h-12 rounded-lg flex-shrink-0"
+                    className="w-12 h-12 rounded-ctrl flex-shrink-0"
                     style={{ backgroundColor: range.color }}
                   />
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-2">
-                      <h4 className="font-bold text-gray-900">{range.label}</h4>
-                      <span className="text-sm font-semibold text-gray-600">
+                      <h4 className="font-semibold text-fg">{range.label}</h4>
+                      <span className="text-small font-semibold text-secondary">
                         {prevMax + 1} - {range.max} µg/m³
                       </span>
                     </div>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-small text-secondary">
                       {idx === 0 && "Air quality is satisfactory, and air pollution poses little or no risk."}
                       {idx === 1 && "Air quality is acceptable. However, there may be a risk for some people, particularly those who are unusually sensitive to air pollution."}
                       {idx === 2 && "Members of sensitive groups may experience health effects. The general public is less likely to be affected."}
@@ -109,22 +110,19 @@ const StatusInfoModal = ({ isOpen, onClose, theme }) => {
           </div>
           
           {/* Source Attribution */}
-          <div className="mt-6 pt-4 border-t border-gray-200">
-            <p className="text-xs text-gray-500">
+          <div className="mt-6 pt-4 border-t border-hairline-soft">
+            <p className="text-cap text-muted">
               <strong>Source:</strong> U.S. Environmental Protection Agency (EPA). 
-              <a href="https://www.airnow.gov/aqi/aqi-basics/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700 underline ml-1">
+              <a href="https://www.airnow.gov/aqi/aqi-basics/" target="_blank" rel="noopener noreferrer" className="text-link hover:underline ml-1">
                 AirNow - Air Quality Index Basics
               </a>
             </p>
           </div>
         </div>
-        <div className="p-6 border-t border-gray-200">
-          <button
-            onClick={onClose}
-            className={`w-full py-3 ${theme.bg} ${theme.hover} text-white font-semibold rounded-lg transition-colors`}
-          >
+        <div className="p-6 border-t border-hairline-soft">
+          <Button wide onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -1098,7 +1096,7 @@ const HeatMapDashboard = ({
             node.style.backdropFilter = 'none';
             node.style.webkitBackdropFilter = 'none';
             const className = typeof node.className === 'string' ? node.className : '';
-            if (className.includes('backdrop-blur') || /bg-white\/\d+/.test(className)) {
+            if (className.includes('backdrop-blur') || /bg-surface\/\d+/.test(className)) {
               node.style.setProperty('background-color', '#ffffff', 'important');
             }
           });
@@ -1189,12 +1187,12 @@ const HeatMapDashboard = ({
   return (
     <div className="h-[calc(100vh-6.5rem)] min-h-[620px]">
       {/* Screenshot container — everything the Share button captures */}
-      <div ref={screenshotRef} className="relative h-full overflow-hidden rounded-2xl bg-slate-100 shadow-lg">
+      <div ref={screenshotRef} className="relative h-full overflow-hidden rounded-card bg-slate-100 shadow-lg">
         {/* Floating controls stay visible without consuming map width. */}
-        <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-white/70 bg-white p-2 shadow-lg sm:left-4 sm:right-auto sm:max-w-[calc(100%-2rem)]">
-          <div className="hidden min-w-0 sm:block">
-            <p className="truncate text-sm font-bold text-gray-900">Air Quality Map</p>
-            <p className="truncate text-[10px] text-gray-500">
+        <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2.5 rounded-pill border border-hairline-soft bg-surface p-2 shadow-lg sm:left-4 sm:right-auto sm:max-w-[calc(100%-2rem)]">
+          <div className="hidden min-w-0 pl-1.5 sm:block">
+            <p className="truncate text-small font-semibold text-fg">Air quality map</p>
+            <p className="truncate text-cap text-muted">
               {showHeatmap
                 ? `${selectedCity.city} · ${openaqHeatmap?.source === 'waqi' ? 'WAQI' : 'OpenAQ'} reference`
                 : browsingWorld || !hasSchoolSelection
@@ -1202,17 +1200,17 @@ const HeatMapDashboard = ({
                   : `Group trails · ${trailScope} · ${dateRangeLabel}`}
             </p>
           </div>
-          <div className="hidden h-7 w-px bg-gray-200 sm:block" />
+          <div className="hidden h-6 w-px bg-hairline-soft sm:block" />
           <div className="flex gap-1.5">
             {Object.entries(metricThemes).map(([key, metric]) => (
               <button
                 key={key}
                 onClick={() => setSelectedMetric(key)}
                 title={metric.label}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                className={`h-8 px-3.5 rounded-pill text-small transition-all border ${
                   selectedMetric === key
-                    ? `${metric.bg} text-white shadow-sm`
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? `${metric.bg} text-white border-transparent`
+                    : 'bg-surface text-secondary border-hairline hover:bg-canvas'
                 }`}
               >
                 {metric.label}
@@ -1220,10 +1218,10 @@ const HeatMapDashboard = ({
             ))}
           </div>
 
-          <div className="hidden h-5 w-px bg-gray-200 sm:block" />
+          <div className="hidden h-6 w-px bg-hairline-soft sm:block" />
 
           <div
-            className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5"
+            className="flex rounded-pill border border-hairline bg-surface p-[3px] gap-0.5"
             role="group"
             aria-label="Trail compare scope"
           >
@@ -1238,10 +1236,10 @@ const HeatMapDashboard = ({
                 type="button"
                 aria-pressed={trailScope === scope.id}
                 onClick={() => selectMapScope(scope.id)}
-                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                className={`rounded-pill px-3 h-[30px] text-small transition-colors ${
                   trailScope === scope.id
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-fg text-white'
+                    : 'text-secondary hover:bg-canvas'
                 }`}
               >
                 {scope.label}
@@ -1249,16 +1247,16 @@ const HeatMapDashboard = ({
             ))}
           </div>
 
-          <div className="hidden h-5 w-px bg-gray-200 sm:block" />
+          <div className="hidden h-6 w-px bg-hairline-soft sm:block" />
 
           <button
             type="button"
             aria-pressed={showHeatmap}
             onClick={() => setShowHeatmap((visible) => !visible)}
-            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+            className={`flex items-center gap-1.5 rounded-pill border h-8 px-3.5 text-small transition-colors ${
               showHeatmap
-                ? 'border-emerald-600 bg-emerald-600 text-white'
-                : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                ? 'border-transparent bg-aqi-good text-white'
+                : 'border-hairline bg-surface text-secondary hover:bg-canvas'
             }`}
           >
             <Layers3 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1273,10 +1271,10 @@ const HeatMapDashboard = ({
                     key={city.id}
                     type="button"
                     onClick={() => setSelectedCityId(city.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    className={`h-8 px-3.5 rounded-pill text-small transition-all border ${
                       selectedCityId === city.id
-                        ? 'bg-slate-800 text-white shadow-sm'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        ? 'bg-fg text-white border-transparent'
+                        : 'bg-surface text-secondary border-hairline hover:bg-canvas'
                     }`}
                   >
                     {city.label}
@@ -1284,19 +1282,19 @@ const HeatMapDashboard = ({
                 ))}
               </div>
 
-              <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
-                <span className="hidden text-[10px] font-bold uppercase tracking-wider text-gray-500 lg:inline lg:mr-2">Accessible</span>
+              <div className="flex items-center bg-canvas border border-hairline rounded-pill px-3 h-8">
+                <span className="hidden text-cap font-semibold uppercase tracking-wider text-muted lg:inline lg:mr-2">Accessible</span>
                 <button
                   type="button"
                   aria-label="Toggle color-vision accessible heatmap colors"
                   aria-pressed={displayMode === 'accessible'}
                   onClick={() => setDisplayMode(prev => prev === 'default' ? 'accessible' : 'default')}
                   className={`w-9 h-5 flex items-center rounded-full p-1 transition-colors duration-300 focus:outline-none ${
-                    displayMode === 'accessible' ? 'bg-blue-600' : 'bg-gray-300'
+                    displayMode === 'accessible' ? 'bg-primary' : 'bg-hairline-soft'
                   }`}
                 >
                   <span
-                    className={`bg-white w-3 h-3 rounded-full shadow-md transform transition-transform duration-300 ${
+                    className={`bg-surface w-3 h-3 rounded-full shadow-md transform transition-transform duration-300 ${
                       displayMode === 'accessible' ? 'translate-x-4' : 'translate-x-0'
                     }`}
                   />
@@ -1309,7 +1307,7 @@ const HeatMapDashboard = ({
             data-export-hide="true"
             onClick={handleShareScreenshot}
             disabled={isCapturing}
-            className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-pill border border-hairline bg-surface h-8 px-3.5 text-small font-medium text-secondary hover:bg-canvas disabled:opacity-50"
           >
             <Share2 className="h-3.5 w-3.5" />
             <span className="hidden lg:inline">{isCapturing ? 'Capturing…' : 'Save map'}</span>
@@ -1319,9 +1317,9 @@ const HeatMapDashboard = ({
         {/* The map is the page; summaries are compact overlays, not a separate column. */}
         <div className="h-full">
           {/* Map */}
-          <div className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white">
+          <div className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-card border border-hairline-soft bg-surface">
             {showHeatmap && (usingOpenAQHeatmap || usingClassHeatmap) && (
-              <p className="absolute left-4 top-20 z-20 max-w-sm rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-emerald-700 shadow">
+              <p className="absolute left-4 top-20 z-20 max-w-sm rounded-ctrl bg-surface px-2.5 py-1.5 text-cap font-medium text-emerald-700 shadow">
                 Visualization source:{' '}
                 {[
                   usingOpenAQHeatmap
@@ -1421,7 +1419,7 @@ const HeatMapDashboard = ({
                           </span>
                         )}
                         <span
-                          className={`flex h-8 min-w-8 items-center justify-center rounded-full border-2 px-2 text-[10px] font-bold text-white shadow-lg ${
+                          className={`flex h-8 min-w-8 items-center justify-center rounded-full border-2 px-2 text-cap font-bold text-white shadow-lg ${
                             home ? 'border-amber-300' : 'border-white'
                           } ${
                             isFocused ? 'bg-blue-600 scale-110' : home ? 'bg-blue-700' : 'bg-slate-600'
@@ -1444,18 +1442,18 @@ const HeatMapDashboard = ({
                     onClose={() => setSchoolPinOpen(false)}
                   >
                     <div className="max-w-[260px] pr-1">
-                      <p className="text-sm font-bold leading-snug text-gray-900">
+                      <p className="text-small font-bold leading-snug text-fg">
                         {activeSchoolPin.name}
                       </p>
                       {isHomeSchool(activeSchoolPin) && (
-                        <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+                        <p className="mt-0.5 text-cap font-semibold uppercase tracking-wide text-amber-600">
                           Your school
                         </p>
                       )}
                       {typeof onOpenRawData === 'function' && (
                         <button
                           type="button"
-                          className="mt-2 w-full rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                          className="mt-2 w-full rounded-ctrl bg-blue-600 px-2.5 py-1.5 text-cap font-semibold text-white hover:opacity-85"
                           onClick={() => {
                             onOpenRawData({
                               schoolName: activeSchoolPin.name,
@@ -1472,13 +1470,13 @@ const HeatMapDashboard = ({
               </MapView>
 
               {mappableSchools.length > 0 && (
-                <div className="absolute right-12 top-2.5 z-10 flex items-center gap-1 rounded bg-white p-0.5 shadow-md">
+                <div className="absolute right-12 top-2.5 z-10 flex items-center gap-1 rounded bg-surface p-0.5 shadow-md">
                   <button
                     type="button"
                     title="Previous school"
                     aria-label="Previous school"
                     onClick={goToPrevSchool}
-                    className="flex h-7 w-7 items-center justify-center rounded text-gray-700 hover:bg-gray-50"
+                    className="flex h-7 w-7 items-center justify-center rounded text-secondary hover:bg-canvas"
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </button>
@@ -1487,7 +1485,7 @@ const HeatMapDashboard = ({
                     title="Next school"
                     aria-label="Next school"
                     onClick={goToNextSchool}
-                    className="flex h-7 w-7 items-center justify-center rounded text-gray-700 hover:bg-gray-50"
+                    className="flex h-7 w-7 items-center justify-center rounded text-secondary hover:bg-canvas"
                   >
                     <ChevronRight className="h-4 w-4" />
                   </button>
@@ -1510,7 +1508,7 @@ const HeatMapDashboard = ({
                 aria-label={isLocating ? 'Finding your location' : 'Center map on your location'}
                 onClick={focusMyLocation}
                 disabled={isLocating}
-                className={`absolute z-10 flex h-8 w-8 items-center justify-center rounded bg-white text-gray-700 shadow-md hover:bg-gray-50 disabled:cursor-wait disabled:text-sky-500 ${
+                className={`absolute z-10 flex h-8 w-8 items-center justify-center rounded bg-surface text-secondary shadow-md hover:bg-canvas disabled:cursor-wait disabled:text-sky-500 ${
                   mappableSchools.length > 0 ? 'right-12 top-12' : 'right-[5.5rem] top-2.5'
                 }`}
               >
@@ -1522,7 +1520,7 @@ const HeatMapDashboard = ({
                   type="button"
                   role="status"
                   onClick={() => setGeoError('')}
-                  className="absolute right-3 top-14 z-20 max-w-xs rounded-lg border border-amber-200 bg-white px-3 py-2 text-left text-xs text-amber-800 shadow-lg"
+                  className="absolute right-3 top-14 z-20 max-w-xs rounded-ctrl border border-amber-200 bg-surface px-3 py-2 text-left text-cap text-amber-800 shadow-lg"
                   title="Dismiss"
                 >
                   {geoError} Click to dismiss.
@@ -1530,11 +1528,11 @@ const HeatMapDashboard = ({
               )}
 
               {mapLoadError && (
-                <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20">
-                  <div className="max-w-lg mx-auto px-6 py-5 bg-white border border-rose-200 rounded-2xl shadow-sm">
+                <div className="absolute inset-0 bg-surface/90 flex items-center justify-center z-20">
+                  <div className="max-w-lg mx-auto px-6 py-5 bg-surface border border-rose-200 rounded-card shadow-sm">
                     <p className="text-base font-bold text-rose-700 mb-2">Map loading error</p>
-                    <p className="text-sm text-gray-700">{mapLoadError}</p>
-                    <p className="text-xs text-gray-500 mt-3">
+                    <p className="text-small text-secondary">{mapLoadError}</p>
+                    <p className="text-cap text-muted mt-3">
                       Check the configured map style URL and your network connection.
                     </p>
                   </div>
@@ -1543,9 +1541,9 @@ const HeatMapDashboard = ({
 
               {showHeatmap && isLoaded && openaqStatus !== 'loading' && heatmapData.features.length === 0 && (
                 <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2">
-                  <div className="rounded-xl border border-amber-200 bg-white px-6 py-4 shadow-lg">
-                    <p className="text-center text-sm font-bold text-gray-800">No heatmap data</p>
-                    <p className="mt-1 text-center text-xs text-gray-500">
+                  <div className="rounded-card border border-amber-200 bg-surface px-6 py-4 shadow-lg">
+                    <p className="text-center text-small font-bold text-fg">No heatmap data</p>
+                    <p className="mt-1 text-center text-cap text-muted">
                       {openaqStatus === 'error'
                         ? 'Reference sensors could not be reached, and there are no geotagged Raw Data points yet.'
                         : `No ${metricThemes[selectedMetric].label} readings near ${selectedCity.label}, and no geotagged class measurements to show.`}
@@ -1556,12 +1554,12 @@ const HeatMapDashboard = ({
 
               {/* Map Legend - Continuous Gradient */}
               {showHeatmap && heatmapData.features.length > 0 && (
-                <div className="absolute bottom-3 left-3 z-10 min-w-[220px] rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg sm:bottom-4 sm:left-4">
-                  <p className="text-xs font-semibold text-gray-700 mb-2">Air Quality Gradient</p>
+                <div className="absolute bottom-3 left-3 z-10 min-w-[220px] rounded-ctrl border border-hairline-soft bg-surface p-2.5 shadow-lg sm:bottom-4 sm:left-4">
+                  <p className="text-cap font-semibold text-secondary mb-2">Air Quality Gradient</p>
                   <div className="w-56 h-4 rounded overflow-hidden mb-2" style={{
                     background: `linear-gradient(to right, ${(displayMode === 'accessible' ? accessibleGradient : heatmapGradient).slice(1).join(', ')})`
                   }} />
-                  <div className="flex justify-between text-[10px] text-gray-600">
+                  <div className="flex justify-between text-cap text-secondary">
                     <span>Good</span>
                     <span>Moderate</span>
                     <span>Unhealthy</span>
@@ -1572,12 +1570,12 @@ const HeatMapDashboard = ({
 
               {/* Trail legend — one color per group within the selected Group/Class/School scope */}
               {trailLegendItems.length > 0 && (
-                <div className={`absolute left-3 z-10 max-w-[220px] rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg ${
+                <div className={`absolute left-3 z-10 max-w-[220px] rounded-ctrl border border-hairline-soft bg-surface p-2.5 shadow-lg ${
                   showHeatmap && heatmapData.features.length > 0
                     ? 'bottom-28 sm:bottom-4 sm:left-[270px]'
                     : 'bottom-3 sm:bottom-4 sm:left-4'
                 }`}>
-                  <p className="text-xs font-semibold text-gray-700 mb-2">
+                  <p className="text-cap font-semibold text-secondary mb-2">
                     {trailScope === 'group'
                       ? 'Group trail'
                       : trailScope === 'class'
@@ -1586,13 +1584,13 @@ const HeatMapDashboard = ({
                   </p>
                   <div className="space-y-1 max-h-28 overflow-y-auto">
                     {trailLegendItems.map((item) => (
-                      <div key={item.label} className="flex items-center gap-2 text-[11px] text-gray-600">
+                      <div key={item.label} className="flex items-center gap-2 text-cap text-secondary">
                         <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
                         <span className="truncate">{item.label}</span>
                       </div>
                     ))}
                   </div>
-                  <p className="mt-2 text-[10px] leading-snug text-gray-500">
+                  <p className="mt-2 text-cap leading-snug text-muted">
                     Lines connect each group&apos;s geotagged spots in time order for the same day.
                     {trailMarkers.length > 0 ? ' Dots are single-fix days.' : ''}
                   </p>
@@ -1605,22 +1603,22 @@ const HeatMapDashboard = ({
           <div className="absolute right-3 top-20 z-20 hidden w-44 flex-col gap-1.5 lg:flex">
             {showHeatmap && (
               <div
-                className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
+                className="min-w-[145px] rounded-ctrl border bg-surface px-3 py-2 shadow-lg"
                 style={{ borderColor: theme.primary }}
               >
                 <div className="flex justify-between items-start">
-                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">City Avg</p>
+                  <p className="text-cap font-black text-muted uppercase tracking-widest">City Avg</p>
                   <button onClick={() => setShowStatusInfo(true)} title="View AQI criteria">
-                    <Info className="w-3.5 h-3.5 text-gray-400" />
+                    <Info className="w-3.5 h-3.5 text-muted" />
                   </button>
                 </div>
                 <div className="flex items-baseline gap-1 mt-1">
                   <span className="text-lg font-bold" style={{ color: theme.primary }}>{stats.city ?? '—'}</span>
-                  {stats.city != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
+                  {stats.city != null && <span className="text-cap font-semibold text-muted">{metricThemes[selectedMetric].unit}</span>}
                 </div>
                 {stats.city != null && (
                   <span
-                    className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                    className="inline-block mt-1 px-2 py-0.5 rounded-full text-cap font-bold"
                     style={{ backgroundColor: getColorForValue(stats.city), color: '#1F2937' }}
                   >
                     {getStatusLabel(stats.city)}
@@ -1629,59 +1627,59 @@ const HeatMapDashboard = ({
               </div>
             )}
 
-            <div className="min-w-[145px] rounded-lg border border-blue-100 bg-white px-3 py-2 shadow-lg">
-              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">School Avg</p>
-              <p className="text-[10px] text-blue-500 font-bold uppercase truncate">
+            <div className="min-w-[145px] rounded-ctrl border border-blue-100 bg-surface px-3 py-2 shadow-lg">
+              <p className="text-cap font-black text-muted uppercase tracking-widest">School Avg</p>
+              <p className="text-cap text-blue-500 font-bold uppercase truncate">
                 {browsingWorld || !hasSchoolSelection
                   ? (browsingWorld ? 'World' : 'All schools')
                   : (activeSchoolPin?.name || filters.school || '—')}
               </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-lg font-bold text-blue-600">{stats.school ?? '—'}</span>
-                {stats.school != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
+                {stats.school != null && <span className="text-cap font-semibold text-muted">{metricThemes[selectedMetric].unit}</span>}
               </div>
             </div>
 
-            <div className="min-w-[145px] rounded-lg border border-indigo-100 bg-white px-3 py-2 shadow-lg">
-              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Group Avg</p>
-              <p className="text-[10px] text-indigo-500 font-bold uppercase truncate">
+            <div className="min-w-[145px] rounded-ctrl border border-indigo-100 bg-surface px-3 py-2 shadow-lg">
+              <p className="text-cap font-black text-muted uppercase tracking-widest">Group Avg</p>
+              <p className="text-cap text-indigo-500 font-bold uppercase truncate">
                 {filters.group ? `Group ${filters.group}` : 'All groups'}
               </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-lg font-bold text-indigo-600">{stats.group ?? '—'}</span>
-                {stats.group != null && <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>}
+                {stats.group != null && <span className="text-cap font-semibold text-muted">{metricThemes[selectedMetric].unit}</span>}
               </div>
             </div>
 
             {bestLocation && worstLocation && (
               <>
                 <div
-                  className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
+                  className="min-w-[145px] rounded-ctrl border bg-surface px-3 py-2 shadow-lg"
                   style={{
                     background: `linear-gradient(135deg, ${getColorForValue(bestLocation[selectedMetric])}30 0%, white 100%)`,
                     borderColor: getColorForValue(bestLocation[selectedMetric]),
                   }}
                 >
-                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Best Area</p>
-                  <p className="text-[10px] text-green-600 font-bold uppercase truncate">{bestLocation.name}</p>
+                  <p className="text-cap font-black text-muted uppercase tracking-widest">Best Area</p>
+                  <p className="text-cap text-green-600 font-bold uppercase truncate">{bestLocation.name}</p>
                   <div className="flex items-baseline gap-1 mt-1">
                     <span className="text-lg font-bold text-green-600">{Number(bestLocation[selectedMetric]).toFixed(1)}</span>
-                    <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>
+                    <span className="text-cap font-semibold text-muted">{metricThemes[selectedMetric].unit}</span>
                   </div>
                 </div>
 
                 <div
-                  className="min-w-[145px] rounded-lg border bg-white px-3 py-2 shadow-lg"
+                  className="min-w-[145px] rounded-ctrl border bg-surface px-3 py-2 shadow-lg"
                   style={{
                     background: `linear-gradient(135deg, ${getColorForValue(worstLocation[selectedMetric])}30 0%, white 100%)`,
                     borderColor: getColorForValue(worstLocation[selectedMetric]),
                   }}
                 >
-                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Needs Attention</p>
-                  <p className="text-[10px] text-orange-600 font-bold uppercase truncate">{worstLocation.name}</p>
+                  <p className="text-cap font-black text-muted uppercase tracking-widest">Needs Attention</p>
+                  <p className="text-cap text-orange-600 font-bold uppercase truncate">{worstLocation.name}</p>
                   <div className="flex items-baseline gap-1 mt-1">
                     <span className="text-lg font-bold text-orange-600">{Number(worstLocation[selectedMetric]).toFixed(1)}</span>
-                    <span className="text-xs font-semibold text-gray-400">{metricThemes[selectedMetric].unit}</span>
+                    <span className="text-cap font-semibold text-muted">{metricThemes[selectedMetric].unit}</span>
                   </div>
                 </div>
               </>
@@ -1693,9 +1691,9 @@ const HeatMapDashboard = ({
               ['School', stats.school, '#2563EB'],
               ['Group', stats.group, '#4F46E5'],
             ].map(([label, value, color]) => (
-              <div key={label} className="rounded-lg border bg-white px-2 py-1 shadow">
-                <span className="mr-1 text-[9px] font-bold uppercase text-gray-500">{label}</span>
-                <span className="text-xs font-bold" style={{ color }}>{value ?? '—'}</span>
+              <div key={label} className="rounded-ctrl border bg-surface px-2 py-1 shadow">
+                <span className="mr-1 text-[9px] font-bold uppercase text-muted">{label}</span>
+                <span className="text-cap font-bold" style={{ color }}>{value ?? '—'}</span>
               </div>
             ))}
           </div>

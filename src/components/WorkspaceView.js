@@ -11,6 +11,7 @@ import { getImportedMeasurements, isBlankHierarchyField } from '../utils/importe
 import { downloadElementAsPng } from './charts/SaveChartButton';
 import BoxPlot from './charts/BoxPlot';
 import ChartFrame from './charts/ChartFrame';
+import Button from './ui/Button';
 
 const CANVAS_WIDTH = 1600;
 const CANVAS_HEIGHT = 1050;
@@ -312,7 +313,7 @@ function ChartContent({ item, noteTheme, plotHeight }) {
     return (
       <div
         data-export-note-body="true"
-        className={`h-full whitespace-pre-wrap rounded-lg border p-3 text-sm leading-relaxed ${theme.body} ${theme.border} ${theme.text}`}
+        className={`h-full whitespace-pre-wrap rounded-ctrl border p-3 text-small leading-relaxed ${theme.body} ${theme.border} ${theme.text}`}
         style={{
           backgroundColor: theme.export.body,
           borderColor: theme.export.border,
@@ -325,7 +326,7 @@ function ChartContent({ item, noteTheme, plotHeight }) {
   }
   if (!chartHasData(item)) {
     return (
-      <div className="flex h-full min-h-[160px] items-center justify-center px-4 text-center text-sm text-gray-500">
+      <div className="flex h-full min-h-[160px] items-center justify-center px-4 text-center text-small text-muted">
         No rows match the current filters (or Raw Data is empty). Import measurements, then try again.
       </div>
     );
@@ -501,10 +502,10 @@ function CanvasItem({
         data-export-note-header={isNote ? noteExport.header : undefined}
         data-export-note-border={isNote ? noteExport.border : undefined}
         data-export-note-text={isNote ? noteExport.text : undefined}
-        className={`flex h-full flex-col overflow-hidden rounded-xl border shadow-lg ${
-          isNote ? noteTheme.body : 'bg-white'
+        className={`flex h-full flex-col overflow-hidden rounded-card border shadow-lg ${
+          isNote ? noteTheme.body : 'bg-surface'
         } ${
-          selected ? 'border-blue-500 ring-2 ring-blue-200' : isNote ? noteTheme.border : 'border-slate-200'
+          selected ? 'border-link ring-2 ring-[rgba(0,102,204,0.2)]' : isNote ? noteTheme.border : 'border-hairline-soft'
         }`}
         style={isNote ? {
           backgroundColor: noteExport.body,
@@ -516,7 +517,7 @@ function CanvasItem({
           data-export-white={isNote ? undefined : 'true'}
           data-export-note-header={isNote ? 'true' : undefined}
           className={`workspace-drag-handle flex shrink-0 cursor-move items-start gap-2 border-b px-3 pb-2.5 pt-3 ${
-            isNote ? noteTheme.header : 'bg-slate-50'
+            isNote ? noteTheme.header : 'bg-canvas'
           }`}
           style={isNote ? {
             backgroundColor: noteExport.header,
@@ -531,7 +532,7 @@ function CanvasItem({
               event.stopPropagation();
               onSelect(item.id);
             }}
-            className={`mt-0.5 h-4 w-4 shrink-0 rounded border ${selected ? 'border-blue-600 bg-blue-600' : 'border-gray-300 bg-white'}`}
+            className={`mt-0.5 h-4 w-4 shrink-0 rounded border ${selected ? 'border-link bg-link' : 'border-hairline bg-surface'}`}
             aria-label={selected ? 'Deselect item' : 'Select item'}
           />
           {!isNote && ownLink && (
@@ -583,13 +584,13 @@ function CanvasItem({
           )}
           <div className="min-w-0 flex-1 space-y-1 overflow-visible">
             <h3
-              className={`break-words text-sm font-bold leading-5 ${isNote ? noteTheme.text : 'text-gray-900'}`}
+              className={`break-words text-small font-bold leading-5 ${isNote ? noteTheme.text : 'text-fg'}`}
               style={isNote ? { color: noteExport.text } : undefined}
             >
               {item.title}
             </h3>
             {item.subtitle && (
-              <p className="break-words text-[10px] leading-4 text-gray-500">{item.subtitle}</p>
+              <p className="break-words text-[10px] leading-4 text-muted">{item.subtitle}</p>
             )}
             {isNote && attachedChart && attachedLink && (
               <p
@@ -618,7 +619,7 @@ function CanvasItem({
               type="button"
               data-export-hide="true"
               onClick={() => setEditing((value) => !value)}
-              className="text-[10px] font-semibold text-blue-600"
+              className="text-[10px] font-semibold text-link"
             >
               {editing ? 'Done' : 'Edit'}
             </button>
@@ -627,7 +628,7 @@ function CanvasItem({
             type="button"
             data-export-hide="true"
             onClick={() => onRemove(item.id)}
-            className="text-gray-400 hover:text-red-600"
+            className="text-muted hover:text-aqi-unhealthy"
             aria-label="Remove item"
           >
             <X className="h-4 w-4" />
@@ -657,7 +658,7 @@ function CanvasItem({
                 />
               ))}
             </div>
-            <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[10px] font-semibold text-gray-600">
+            <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[10px] font-semibold text-secondary">
               <Link2 className="h-3 w-3 shrink-0" aria-hidden="true" />
               <select
                 value={item.attachedToId || ''}
@@ -688,7 +689,7 @@ function CanvasItem({
                     attachOffset: attachOffsetFor(parked, chart.layout),
                   });
                 }}
-                className="min-w-0 flex-1 truncate rounded border border-gray-300 bg-white px-1.5 py-1 text-[10px] font-medium text-gray-700"
+                className="min-w-0 flex-1 truncate rounded-ctrl border border-hairline bg-surface px-1.5 py-1 text-[10px] font-medium text-secondary"
               >
                 <option value="">Not attached — drag near a chart to snap</option>
                 {chartOptions.map((chart) => (
@@ -707,7 +708,7 @@ function CanvasItem({
               autoFocus
               value={item.content || ''}
               onChange={(event) => onUpdate(item.id, { content: event.target.value })}
-              className={`h-full w-full resize-none rounded-lg border p-3 text-sm focus:border-blue-500 focus:outline-none ${noteTheme.body} ${noteTheme.border} ${noteTheme.text}`}
+              className={`h-full w-full resize-none rounded-ctrl border p-3 text-small focus:border-link focus:outline-none ${noteTheme.body} ${noteTheme.border} ${noteTheme.text}`}
               placeholder="Write observations, evidence, reasoning, or a report paragraph…"
             />
           ) : (
@@ -748,7 +749,22 @@ const WorkspaceView = ({
   const [chartType, setChartType] = useState('auto');
   const [selectedIds, setSelectedIds] = useState([]);
   const canvasRef = useRef(null);
+  const canvasScrollRef = useRef(null);
   const itemRefs = useRef(new Map());
+  // The empty-state notice centers on the *visible* scroll viewport, not the
+  // full (much wider) canvas — otherwise it lands off to one side whenever
+  // the canvas is wider than what's on screen.
+  const [canvasViewport, setCanvasViewport] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const el = canvasScrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => setCanvasViewport({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const validChartTypes = useMemo(() => {
     const xNumeric = isNumeric(xColumn);
@@ -860,45 +876,50 @@ const WorkspaceView = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="page__head flex flex-wrap items-center gap-3">
         <div className="mr-auto max-w-2xl">
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900">
+          <h1 className="flex items-center gap-2 text-page text-fg">
             <LayoutGrid className="h-6 w-6" style={{ color: theme.primary }} />
             Workspace
             <button
               type="button"
               onClick={() => setShowHelp(true)}
-              className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              className="rounded-full p-1 text-muted hover:bg-canvas hover:text-secondary"
               title="What is Workspace?"
               aria-label="What is Workspace?"
             >
               <HelpCircle className="h-5 w-5" />
             </button>
           </h1>
-          <p className="mt-1 text-sm text-gray-600">
-            Your classroom storyboard — collect charts, add sticky notes, and export a report.
-            Bring visuals from Analysis (<span className="font-medium">Send to Workspace</span>),
-            or build new ones here.
+          <p className="mt-1 text-small text-muted">
+            Pin charts, attach notes, export a report. Items last for this browser session.
           </p>
         </div>
-        <button type="button" onClick={() => setBuilderOpen(true)} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-white ${theme.bg} ${theme.hover}`}>
-          <Plus className="h-4 w-4" /> Build chart
-        </button>
-        <button type="button" onClick={addNote} className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-          <FileText className="h-4 w-4" /> Add note
-        </button>
-        <button type="button" disabled={!selectedIds.length} onClick={exportSelected} className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-40">
-          <CheckSquare className="h-4 w-4" /> Export selected ({selectedIds.length})
-        </button>
-        <button type="button" disabled={!workspaceItems.length} onClick={exportWorkspace} className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-40">
-          <Download className="h-4 w-4" /> Export workspace
-        </button>
-        <button type="button" disabled={!selectedIds.length} onClick={deleteSelected} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 disabled:opacity-40">
-          <Trash2 className="h-4 w-4" /> Delete
-        </button>
+        <div className="actions flex flex-wrap items-center gap-2">
+          <Button data-tour="workspace-build" size="sm" onClick={() => setBuilderOpen(true)}>
+            <Plus className="h-4 w-4" /> Build chart
+          </Button>
+          <Button data-tour="workspace-note" size="sm" variant="neutral" onClick={addNote}>
+            <FileText className="h-4 w-4" /> Add note
+          </Button>
+          <Button size="sm" variant="neutral" disabled={!selectedIds.length} onClick={exportSelected}>
+            <CheckSquare className="h-4 w-4" /> Export selected ({selectedIds.length})
+          </Button>
+          <Button data-tour="workspace-export" size="sm" variant="neutral" disabled={!workspaceItems.length} onClick={exportWorkspace}>
+            <Download className="h-4 w-4" /> Export workspace
+          </Button>
+          <Button size="sm" variant="danger" disabled={!selectedIds.length} onClick={deleteSelected}>
+            <Trash2 className="h-4 w-4" /> Delete
+          </Button>
+        </div>
       </div>
 
-      <div className="overflow-auto rounded-2xl border border-slate-300 bg-slate-200 shadow-inner" style={{ maxHeight: 'calc(100vh - 190px)' }}>
+      <div
+        ref={canvasScrollRef}
+        data-tour="workspace-canvas"
+        className="canvas overflow-auto rounded-card border border-hairline bg-canvas shadow-inner"
+        style={{ maxHeight: 'calc(100vh - 190px)' }}
+      >
         <div
           ref={canvasRef}
           className="relative bg-slate-50"
@@ -911,8 +932,13 @@ const WorkspaceView = ({
         >
           {workspaceItems.length === 0 && (
             <div
-              className="absolute left-1/2 top-[16%] w-[min(34rem,92%)] -translate-x-1/2 overflow-hidden rounded-[22px] border border-white/60 bg-white/75 px-7 py-6 text-left shadow-[0_18px_50px_rgba(15,23,42,0.14)] backdrop-blur-xl"
-              style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif' }}
+              className="absolute w-[min(34rem,92%)] overflow-hidden rounded-[22px] border border-white/60 bg-white/75 px-7 py-6 text-left shadow-[0_18px_50px_rgba(15,23,42,0.14)] backdrop-blur-xl"
+              style={{
+                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif',
+                left: canvasViewport.width ? canvasViewport.width / 2 : '50%',
+                top: canvasViewport.height ? Math.max(24, canvasViewport.height * 0.16) : '16%',
+                transform: 'translateX(-50%)',
+              }}
             >
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Workspace</p>
               <h2 className="mt-1 text-[22px] font-semibold tracking-tight text-slate-900">
@@ -1048,59 +1074,54 @@ const WorkspaceView = ({
 
       {builderOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBuilderOpen(false)}>
-          <div className="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="w-full max-w-5xl rounded-card bg-surface p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="mb-4 flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Build a chart</h2>
-                <p className="text-sm text-gray-500">Choose columns and one of the valid classroom visualizations.</p>
+                <h2 className="text-tile text-fg">Build a chart</h2>
+                <p className="text-small text-muted">Choose columns and one of the valid classroom visualizations.</p>
               </div>
-              <button type="button" onClick={() => setBuilderOpen(false)}><X className="h-5 w-5 text-gray-500" /></button>
+              <button type="button" onClick={() => setBuilderOpen(false)}><X className="h-5 w-5 text-muted" /></button>
             </div>
             <div className="mb-4 flex flex-wrap items-end gap-3">
               {[
                 ['X axis', xColumn, setXColumn],
                 ['Y axis', yColumn, setYColumn],
               ].map(([label, value, setter]) => (
-                <label key={label} className="text-xs font-semibold text-gray-600">
+                <label key={label} className="text-cap font-semibold text-secondary">
                   {label}
-                  <select value={value} onChange={(event) => setter(event.target.value)} className="mt-1 block min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+                  <select value={value} onChange={(event) => setter(event.target.value)} className="sel-sm mt-1 block min-w-[180px] h-10 rounded-ctrl border border-hairline bg-surface px-3 text-small">
                     <optgroup label="Numeric">{NUMERIC_COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</optgroup>
                     <optgroup label="Categorical">{CATEGORICAL_COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</optgroup>
                   </select>
                 </label>
               ))}
-              <label className="text-xs font-semibold text-gray-600">
+              <label className="text-cap font-semibold text-secondary">
                 Visualization
-                <select value={validChartTypes.includes(chartType) ? chartType : 'auto'} onChange={(event) => setChartType(event.target.value)} className="mt-1 block min-w-[170px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+                <select value={validChartTypes.includes(chartType) ? chartType : 'auto'} onChange={(event) => setChartType(event.target.value)} className="sel-sm mt-1 block min-w-[170px] h-10 rounded-ctrl border border-hairline bg-surface px-3 text-small">
                   {validChartTypes.map((kind) => <option key={kind} value={kind}>{kind === 'auto' ? 'Auto suggested' : kind[0].toUpperCase() + kind.slice(1)}</option>)}
                 </select>
               </label>
-              <span className="flex items-center gap-1 pb-2 text-xs text-gray-500">
+              <span className="flex items-center gap-1 pb-2 text-cap text-muted">
                 <Sparkles className="h-3.5 w-3.5" style={{ color: theme.primary }} />
                 {resolveChartKind('auto', xColumn, yColumn)} suggested
               </span>
-              <button
-                type="button"
-                onClick={addBuiltChart}
-                disabled={!chartHasData(preview)}
-                className={`ml-auto rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${theme.bg} ${theme.hover}`}
-              >
+              <Button size="sm" className="ml-auto" onClick={addBuiltChart} disabled={!chartHasData(preview)}>
                 Add to canvas
-              </button>
+              </Button>
             </div>
             {!imported.length && (
-              <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <p className="mb-3 rounded-ctrl border border-amber-200 bg-amber-50 px-3 py-2 text-small text-amber-800">
                 Raw Data is empty — import or sync measurements before building a chart.
               </p>
             )}
             {imported.length > 0 && (
-              <p className="mb-3 text-xs text-gray-500">
+              <p className="mb-3 text-cap text-muted">
                 Using {scopedRows.length} row{scopedRows.length === 1 ? '' : 's'} from your loaded measurements
                 {scopedRows.length !== imported.length ? ` (${imported.length} total in cache)` : ''}.
               </p>
             )}
-            <div className="rounded-xl border bg-white p-3">
-              <div className="mb-2 text-sm font-bold text-gray-800">
+            <div className="rounded-card border border-hairline-soft bg-surface p-3">
+              <div className="mb-2 text-small font-bold text-fg">
                 {columnFor(xColumn).label} vs {columnFor(yColumn).label} ({preview.kind})
               </div>
               <div className="h-[280px]">

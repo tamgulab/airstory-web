@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { BarChart3, Camera, Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, Pencil, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
+import { Download, Filter, Search, Calendar, ChevronDown, TrendingUp, TrendingDown, ChevronRight, Image as ImageIcon, Pencil, X, Upload, Share2, Lock, SlidersHorizontal } from 'lucide-react';
 import { addMeasurementEdit, clearWorkspaceMeasurements, getMeasurements, importCsvMeasurements, setSessionVisibility } from '../api/data';
 import {
   clearImportedMeasurements,
@@ -21,6 +21,7 @@ import {
   csvEscapeCell,
 } from '../constants/sensorCsv';
 import { schoolLabelsMatch as softSchoolMatch } from '../utils/schoolLabels';
+import Button from './ui/Button';
 
 const CSV_UPLOAD_CHUNK_SIZE = 2500;
 
@@ -46,8 +47,8 @@ const fToC = (f) => Math.round(((Number(f) - 32) * 5) / 9);
 // Visibility pills (Section 4): how far a session's data reaches. The session owner (or the class
 // teacher) can promote/demote it; the server enforces the reach in the school/public workspaces.
 const VISIBILITY_META = {
-  school: { label: 'School only', cls: 'bg-blue-100 text-blue-800', dot: 'bg-blue-500' },
-  public: { label: 'Public', cls: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
+  school: { label: 'School only', cls: 'bg-canvas text-fg border border-hairline', dot: 'bg-fg' },
+  public: { label: 'Public', cls: 'bg-canvas text-aqi-good border border-hairline', dot: 'bg-aqi-good' },
 };
 const VISIBILITY_OPTIONS = ['school', 'public']; // School only is the default
 
@@ -319,6 +320,13 @@ const RawDataView = ({
     return m ? normHierarchy(m.group) : '';
   };
   const selectedClassLabel = classPeriods.find((c) => c.key === scopeClassKey)?.label || '';
+  // File-finder-style path for the current scope (School › Class › Group), only as deep as
+  // the selected scope tab — mirrors the School/Class/Group toggle above it.
+  const scopeBreadcrumb = [
+    viewerIdentity.school,
+    scopeTab !== 'school' ? selectedClassLabel : null,
+    scopeTab === 'group' ? scopeGroup : null,
+  ].filter(Boolean);
 
   // Keep Class/Group selects honest: if state is blank or stale, snap to a real option so the
   // visible dropdown value matches what the table filter uses.
@@ -808,15 +816,15 @@ const RawDataView = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-6 flex-wrap">
         <div>
-          <div className="flex items-center gap-2 mb-2">
-            <h1 className="text-3xl font-bold text-gray-900">Raw Data</h1>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-page text-fg">Raw data</h1>
             <button
               onClick={() => setShowHelpModal(true)}
-              className="flex items-center justify-center w-6 h-6 rounded-full border border-gray-300 text-gray-500 text-sm font-bold leading-none hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="flex items-center justify-center w-6 h-6 rounded-full border border-hairline text-muted text-cap font-bold leading-none hover:bg-canvas hover:text-fg transition-colors"
               title="How to use Raw Data"
               aria-label="How to use Raw Data"
             >
@@ -828,7 +836,7 @@ const RawDataView = ({
               <button
                 onClick={() => setShowDisplaySettings((s) => !s)}
                 className={`flex items-center justify-center w-6 h-6 rounded-full border transition-colors ${
-                  showDisplaySettings ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                  showDisplaySettings ? 'border-link bg-canvas text-link' : 'border-hairline text-muted hover:bg-canvas hover:text-fg'
                 }`}
                 title="Display preferences"
                 aria-label="Display preferences"
@@ -836,16 +844,16 @@ const RawDataView = ({
                 <SlidersHorizontal className="w-3.5 h-3.5" />
               </button>
               {showDisplaySettings && (
-                <div className="absolute left-0 z-30 mt-2 w-60 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-left">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Display preferences</p>
+                <div className="absolute left-0 z-30 mt-2 w-60 bg-surface border border-hairline-soft rounded-card shadow-lg p-3 text-left">
+                  <p className="text-cap font-semibold text-muted uppercase tracking-wider mb-2">Display preferences</p>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-gray-700">Temperature</span>
-                    <div className="inline-flex rounded-md border border-gray-200 p-0.5">
+                    <span className="text-small text-secondary">Temperature</span>
+                    <div className="inline-flex rounded-ctrl border border-hairline p-0.5">
                       {['C', 'F'].map((u) => (
                         <button
                           key={u}
                           onClick={() => setTempUnit(u)}
-                          className={`px-2 py-0.5 text-xs rounded ${tempUnit === u ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                          className={`px-2 py-0.5 text-cap rounded ${tempUnit === u ? 'bg-fg text-white' : 'text-secondary hover:bg-canvas'}`}
                         >
                           °{u}
                         </button>
@@ -853,13 +861,13 @@ const RawDataView = ({
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">Date format</span>
-                    <div className="inline-flex rounded-md border border-gray-200 p-0.5">
+                    <span className="text-small text-secondary">Date format</span>
+                    <div className="inline-flex rounded-ctrl border border-hairline p-0.5">
                       {[{ k: 'ymd', l: 'yyyy-mm-dd' }, { k: 'mdy', l: 'mm-dd-yyyy' }].map((o) => (
                         <button
                           key={o.k}
                           onClick={() => setDateFormat(o.k)}
-                          className={`px-2 py-0.5 text-xs rounded ${dateFormat === o.k ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                          className={`px-2 py-0.5 text-cap rounded ${dateFormat === o.k ? 'bg-fg text-white' : 'text-secondary hover:bg-canvas'}`}
                         >
                           {o.l}
                         </button>
@@ -870,27 +878,29 @@ const RawDataView = ({
               )}
             </div>
           </div>
-          <p className="text-gray-600">
-            Explore air quality data from your group, class, and school
+          <p className="text-small text-muted">
+            Every session from your group, class, and school
           </p>
-          {loadingBackend && <p className="text-xs text-gray-500 mt-1">Loading backend data...</p>}
-          {importError && <p className="text-xs text-red-600 mt-1">{importError}</p>}
+          {loadingBackend && <p className="text-cap text-muted mt-1">Loading backend data...</p>}
+          {importError && <p className="text-cap text-aqi-unhealthy mt-1">{importError}</p>}
         </div>
         <div className="flex flex-col items-end gap-2">
           {/* Read-only identity: your School · Class (teacher · period) · Group */}
-          <div className="text-xs font-semibold text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-3 py-1">
+          <div className="text-cap font-semibold text-secondary bg-canvas border border-hairline rounded-pill px-3 py-1">
             {viewerIdentity.school} · {primaryMembership.instructor} · {primaryMembership.period} · {primaryMembership.group}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
           {!isReadOnly && (
-          <label className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all cursor-pointer">
+          <label className="inline-flex items-center gap-2 h-9 px-4 text-small text-on-primary bg-primary rounded-pill transition-opacity hover:opacity-85 cursor-pointer">
             <Upload className="w-4 h-4" />
             Import CSV
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
           </label>
           )}
           {!isReadOnly && isTeacher && (
-          <button
+          <Button
+            size="sm"
+            variant="danger"
             onClick={() => setConfirmState({
               variant: 'danger',
               title: 'Clear all imported data?',
@@ -898,54 +908,47 @@ const RawDataView = ({
               confirmLabel: 'Clear data',
               onConfirm: handleClearImportedData,
             })}
-            className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-all"
           >
-            Clear Data
-          </button>
+            Clear data
+          </Button>
           )}
           <div className="relative">
-            <button
-              onClick={() => setExportMenuOpen((o) => !o)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
-            >
+            <Button size="sm" variant="neutral" onClick={() => setExportMenuOpen((o) => !o)}>
               <Download className="w-4 h-4" />
               Export CSV
               <ChevronDown className="w-4 h-4" />
-            </button>
+            </Button>
             {exportMenuOpen && (
-              <div className="absolute right-0 z-20 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg p-1">
+              <div className="absolute right-0 z-20 mt-2 w-48 bg-surface border border-hairline-soft rounded-card shadow-lg p-1">
                 <button
                   onClick={handleDownloadCsv}
-                  className="block w-full text-left px-3 py-2 text-sm text-gray-700 rounded-md hover:bg-gray-50"
+                  className="block w-full text-left px-3 py-2 text-small text-fg rounded-ctrl hover:bg-canvas"
                 >
                   Download CSV
                 </button>
                 <button
                   onClick={handleSaveCsvAs}
-                  className="block w-full text-left px-3 py-2 text-sm text-gray-700 rounded-md hover:bg-gray-50"
+                  className="block w-full text-left px-3 py-2 text-small text-fg rounded-ctrl hover:bg-canvas"
                 >
                   Save CSV as…
                 </button>
               </div>
             )}
           </div>
-          <button
-            onClick={handleShareCsv}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-all"
-          >
+          <Button size="sm" variant="neutral" onClick={handleShareCsv}>
             <Share2 className="w-4 h-4" />
             Share
-          </button>
+          </Button>
           </div>
         </div>
       </div>
 
       {/* Merged toolbar: scope tabs · search · filter chips · Apply / Clear */}
-      <div className="bg-white rounded-2xl p-4 shadow-lg border border-gray-200">
+      <div className="bg-surface border border-hairline-soft rounded-card p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           {/* Scope tabs — a within-class convenience filter; hidden in the aggregate workspaces. */}
           {!isReadOnly && (
-          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+          <div className="seg inline-flex bg-surface border border-hairline rounded-pill p-[3px] gap-0.5">
             {[
               { id: 'school', label: 'School' },
               { id: 'class', label: 'Class' },
@@ -954,8 +957,9 @@ const RawDataView = ({
               <button
                 key={tab.id}
                 onClick={() => { setScopeTab(tab.id); setHasEngaged(true); }}
-                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-                  scopeTab === tab.id ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:bg-gray-100'
+                aria-pressed={scopeTab === tab.id}
+                className={`h-[30px] px-3.5 text-small rounded-pill transition-colors ${
+                  scopeTab === tab.id ? 'bg-fg text-white' : 'text-secondary hover:bg-canvas'
                 }`}
               >
                 {tab.label}
@@ -970,20 +974,20 @@ const RawDataView = ({
               <select
                 value={scopeGroup}
                 onChange={(e) => { setScopeGroup(e.target.value); setHasEngaged(true); }}
-                className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="sel-sm h-9 text-small border border-hairline rounded-ctrl bg-surface text-fg pl-3 pr-8"
               >
                 {groupsForSelectedClass.map((g) => (
                   <option key={g} value={g}>{g === viewerGroupForClass(scopeClassKey) ? `${g} (My Group)` : g}</option>
                 ))}
               </select>
-              <span className="text-xs text-gray-500 whitespace-nowrap">in {selectedClassLabel}</span>
+              <span className="text-cap text-muted whitespace-nowrap">in {selectedClassLabel}</span>
             </div>
           )}
           {!isReadOnly && scopeTab === 'class' && (
             <select
               value={scopeClassKey}
               onChange={(e) => selectClassContext(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="sel-sm h-9 text-small border border-hairline rounded-ctrl bg-surface text-fg pl-3 pr-8"
             >
               {classPeriods.map((c) => (
                 <option key={c.key} value={c.key}>{viewerClassKeys.includes(c.key) ? `${c.label} (My Class)` : c.label}</option>
@@ -993,14 +997,14 @@ const RawDataView = ({
 
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') applyFilters(); }}
-              placeholder="Search location, session, group..."
-              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Search location, session, or group"
+              className="w-full h-9 pl-9 pr-3 text-small border border-hairline rounded-ctrl bg-surface text-fg focus:outline-none focus:border-link focus:ring-4 focus:ring-[rgba(0,102,204,0.15)]"
             />
           </div>
 
@@ -1008,18 +1012,18 @@ const RawDataView = ({
           <div className="relative">
             <button
               onClick={() => setOpenChip(openChip === 'date' ? null : 'date')}
-              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
-                selectedDatesDraft.size > 0 ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              className={`flex items-center gap-2 h-9 px-3 text-small border rounded-ctrl transition-colors ${
+                selectedDatesDraft.size > 0 ? 'border-link bg-canvas text-link' : 'border-hairline text-secondary hover:bg-canvas'
               }`}
             >
               <Calendar className="w-4 h-4" />
               {selectedDatesDraft.size > 0
                 ? `${selectedDatesDraft.size} date${selectedDatesDraft.size > 1 ? 's' : ''}`
-                : 'Date range'}
+                : 'Any date'}
               <ChevronDown className="w-4 h-4" />
             </button>
             {openChip === 'date' && (
-              <div className="absolute right-0 z-20 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-3">
+              <div className="absolute right-0 z-20 mt-2 bg-surface border border-hairline-soft rounded-card shadow-lg p-3">
                 <DataCalendar
                   dataDates={dataDates}
                   selectedDates={selectedDatesDraft}
@@ -1029,7 +1033,7 @@ const RawDataView = ({
                 {selectedDatesDraft.size > 0 && (
                   <button
                     onClick={() => setSelectedDatesDraft(new Set())}
-                    className="mt-2 w-full text-center text-xs text-blue-600 hover:text-blue-700 font-medium"
+                    className="mt-2 w-full text-center text-cap text-link hover:underline font-medium"
                   >
                     Clear dates
                   </button>
@@ -1042,18 +1046,18 @@ const RawDataView = ({
           <div className="relative">
             <button
               onClick={() => setOpenChip(openChip === 'metrics' ? null : 'metrics')}
-              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
-                METRIC_KEYS.some((m) => !metricsDraft[m.key]) ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              className={`flex items-center gap-2 h-9 px-3 text-small border rounded-ctrl transition-colors ${
+                METRIC_KEYS.some((m) => !metricsDraft[m.key]) ? 'border-link bg-canvas text-link' : 'border-hairline text-secondary hover:bg-canvas'
               }`}
             >
               <Filter className="w-4 h-4" />
-              Metrics
+              All metrics
               <ChevronDown className="w-4 h-4" />
             </button>
             {openChip === 'metrics' && (
-              <div className="absolute right-0 z-20 mt-2 w-44 bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-1">
+              <div className="absolute right-0 z-20 mt-2 w-44 bg-surface border border-hairline-soft rounded-card shadow-lg p-2 space-y-1">
                 {METRIC_KEYS.map((m) => (
-                  <label key={m.key} className="flex items-center gap-2 px-2 py-1 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded">
+                  <label key={m.key} className="flex items-center gap-2 px-2 py-1 text-small text-fg cursor-pointer hover:bg-canvas rounded-ctrl">
                     <input
                       type="checkbox"
                       checked={!!metricsDraft[m.key]}
@@ -1070,19 +1074,19 @@ const RawDataView = ({
           <div className="relative">
             <button
               onClick={() => setOpenChip(openChip === 'location' ? null : 'location')}
-              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
-                locationFilter !== 'all' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              className={`flex items-center gap-2 h-9 px-3 text-small border rounded-ctrl transition-colors ${
+                locationFilter !== 'all' ? 'border-link bg-canvas text-link' : 'border-hairline text-secondary hover:bg-canvas'
               }`}
             >
               <Filter className="w-4 h-4" />
-              {locationFilter === 'all' ? 'Location' : locationFilter}
+              {locationFilter === 'all' ? 'All locations' : locationFilter}
               <ChevronDown className="w-4 h-4" />
             </button>
             {openChip === 'location' && (
-              <div className="absolute right-0 z-20 mt-2 w-52 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg p-1">
+              <div className="absolute right-0 z-20 mt-2 w-52 max-h-64 overflow-y-auto bg-surface border border-hairline-soft rounded-card shadow-lg p-1">
                 <button
                   onClick={() => { setLocationFilter('all'); setOpenChip(null); }}
-                  className={`block w-full text-left px-3 py-1.5 text-sm rounded-md ${locationFilter === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                  className={`block w-full text-left px-3 py-1.5 text-small rounded-ctrl ${locationFilter === 'all' ? 'bg-canvas text-link font-medium' : 'text-fg hover:bg-canvas'}`}
                 >
                   All Locations
                 </button>
@@ -1090,7 +1094,7 @@ const RawDataView = ({
                   <button
                     key={loc}
                     onClick={() => { setLocationFilter(loc); setOpenChip(null); }}
-                    className={`block w-full text-left px-3 py-1.5 text-sm rounded-md ${locationFilter === loc ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                    className={`block w-full text-left px-3 py-1.5 text-small rounded-ctrl ${locationFilter === loc ? 'bg-canvas text-link font-medium' : 'text-fg hover:bg-canvas'}`}
                   >
                     {loc}
                   </button>
@@ -1099,56 +1103,68 @@ const RawDataView = ({
             )}
           </div>
 
-          {/* Apply / Clear */}
-          <button
-            onClick={applyFilters}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all"
-          >
-            Apply
-          </button>
-          <button
-            onClick={clearFilters}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all"
-          >
-            Clear filters
-          </button>
+        </div>
 
-          {scopeTab === 'school' && (
-            <span className="text-sm text-gray-500 w-full md:w-auto">All sessions across {viewerIdentity.school}.</span>
-          )}
+        {/* Second row: a file-path-style breadcrumb for the current scope on the left,
+            Apply/Clear as one grouped unit on the right. */}
+        <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-hairline-soft">
+          <nav aria-label="Current scope" className="flex items-center gap-1.5 text-small text-secondary min-w-0">
+            {scopeBreadcrumb.map((crumb, idx) => (
+              <span key={idx} className="flex items-center gap-1.5 min-w-0">
+                {idx > 0 && <ChevronRight className="w-3.5 h-3.5 text-muted shrink-0" aria-hidden="true" />}
+                <span className={`truncate ${idx === scopeBreadcrumb.length - 1 ? 'font-semibold text-fg' : ''}`}>
+                  {crumb}
+                </span>
+              </span>
+            ))}
+            {scopeTab === 'school' && (
+              <span className="text-muted">— all sessions across the school.</span>
+            )}
+          </nav>
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            <button
+              onClick={clearFilters}
+              className="chip inline-flex items-center h-8 px-3.5 text-small rounded-pill border border-hairline text-secondary bg-surface hover:bg-canvas"
+            >
+              Clear
+            </button>
+            <button
+              onClick={applyFilters}
+              className="chip on inline-flex items-center h-8 px-3.5 text-small rounded-pill bg-fg text-white border border-fg"
+            >
+              Apply
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Results summary */}
-      <div className="flex items-center justify-between text-sm px-1">
-        <p className="text-gray-600">
-          Showing <span className="font-semibold text-gray-900">{paginatedData.length}</span> of{' '}
-          <span className="font-semibold text-gray-900">{viewRows.length}</span> sessions
-        </p>
-      </div>
+      <p className="text-small text-muted px-1">
+        Showing {paginatedData.length} of {viewRows.length} sessions · school {viewerIdentity.school || '—'}
+      </p>
 
       {/* Data Table */}
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+      <div className="tablewrap border border-hairline-soft rounded-card bg-surface overflow-hidden">
         {viewRows.length === 0 && (
-          <div className="px-6 py-16 text-center border-b border-gray-200">
+          <div className="empty border-0 rounded-none px-6 py-16 text-center border-b border-hairline-soft">
             {!hasEngaged && !isReadOnly ? (
               <>
-                <p className="text-lg font-semibold text-gray-800">Select a scope or filters to view sessions</p>
-                <p className="text-sm text-gray-500 mt-2">
+                <p className="text-body font-semibold text-fg">Select a scope or filters to view sessions</p>
+                <p className="text-small text-muted mt-2">
                   Pick a scope tab (Group / Class / School) or apply filters above to load sessions.
                 </p>
               </>
             ) : rawData.length > 0 ? (
               <>
-                <p className="text-lg font-semibold text-gray-800">No sessions match your filters</p>
-                <p className="text-sm text-gray-500 mt-2">
+                <p className="text-body font-semibold text-fg">No sessions match your filters</p>
+                <p className="text-small text-muted mt-2">
                   Adjust your scope or filters, or use Clear filters.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-lg font-semibold text-gray-800">No data imported</p>
-                <p className="text-sm text-gray-500 mt-2">
+                <p className="text-body font-semibold text-fg">No data imported</p>
+                <p className="text-small text-muted mt-2">
                   Import a CSV from your app export, or connect backend data.
                 </p>
               </>
@@ -1156,14 +1172,14 @@ const RawDataView = ({
           </div>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b-2 border-gray-200">
+          <table className="w-full text-small">
+            <thead>
               <tr>
-                <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider w-12">
+                <th className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline w-12">
                 </th>
                 <th
                   onClick={() => handleSort('capturedAt')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors whitespace-nowrap"
+                  className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center gap-2">
                     Timestamp
@@ -1175,13 +1191,13 @@ const RawDataView = ({
                     setSelectedMetric('pm25');
                     handleSort('pm25');
                   }}
-                  className={`w-32 px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.pm25 ? '' : 'hidden'} ${
-                    selectedMetric === 'pm25' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
+                  className={`w-32 px-4 py-3 text-left text-cap font-semibold bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors ${appliedMetrics.pm25 ? '' : 'hidden'} ${
+                    selectedMetric === 'pm25' ? `${theme.bg} text-white hover:opacity-90` : 'text-secondary'
                   }`}
                   title="Particulate matter 2.5"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="leading-tight">PM 2.5 <span className="normal-case">(µg/m³)</span></span>
+                    <span className="leading-tight">PM 2.5 <span className="normal-case font-normal">(µg/m³)</span></span>
                     <SortIcon columnKey="pm25" />
                   </div>
                 </th>
@@ -1190,13 +1206,13 @@ const RawDataView = ({
                     setSelectedMetric('co');
                     handleSort('co');
                   }}
-                  className={`w-32 px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.co ? '' : 'hidden'} ${
-                    selectedMetric === 'co' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
+                  className={`w-32 px-4 py-3 text-left text-cap font-semibold bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors ${appliedMetrics.co ? '' : 'hidden'} ${
+                    selectedMetric === 'co' ? `${theme.bg} text-white hover:opacity-90` : 'text-secondary'
                   }`}
                   title="Carbon monoxide"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="leading-tight">CO <span className="normal-case">(ppm)</span></span>
+                    <span className="leading-tight">CO <span className="normal-case font-normal">(ppm)</span></span>
                     <SortIcon columnKey="co" />
                   </div>
                 </th>
@@ -1205,13 +1221,13 @@ const RawDataView = ({
                     setSelectedMetric('temp');
                     handleSort('temp');
                   }}
-                  className={`w-32 px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.temp ? '' : 'hidden'} ${
-                    selectedMetric === 'temp' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
+                  className={`w-32 px-4 py-3 text-left text-cap font-semibold bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors ${appliedMetrics.temp ? '' : 'hidden'} ${
+                    selectedMetric === 'temp' ? `${theme.bg} text-white hover:opacity-90` : 'text-secondary'
                   }`}
                   title="Temperature"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="leading-tight">TEMP ({tempUnitLabel})</span>
+                    <span className="leading-tight">Temp ({tempUnitLabel})</span>
                     <SortIcon columnKey="temp" />
                   </div>
                 </th>
@@ -1220,60 +1236,60 @@ const RawDataView = ({
                     setSelectedMetric('humidity');
                     handleSort('humidity');
                   }}
-                  className={`w-32 px-4 py-4 text-left text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors ${appliedMetrics.humidity ? '' : 'hidden'} ${
-                    selectedMetric === 'humidity' ? `${theme.bg} text-white hover:opacity-90` : 'text-gray-700'
+                  className={`w-32 px-4 py-3 text-left text-cap font-semibold bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors ${appliedMetrics.humidity ? '' : 'hidden'} ${
+                    selectedMetric === 'humidity' ? `${theme.bg} text-white hover:opacity-90` : 'text-secondary'
                   }`}
                   title="Humidity"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="leading-tight">HUM (%)</span>
+                    <span className="leading-tight">Humidity (%)</span>
                     <SortIcon columnKey="humidity" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('location')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                 >
                   <div className="flex items-center gap-2">
                     Location
                     <SortIcon columnKey="location" />
                   </div>
                 </th>
-                <th className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                  INDOOR/OUTDOOR
+                <th className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline">
+                  Setting
                 </th>
                 <th
                   onClick={() => handleSort('latitude')}
-                  className="w-px whitespace-nowrap px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="w-px whitespace-nowrap px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                   title="GPS Latitude"
                 >
                   <div className="flex items-center gap-2">
-                    GPS LAT
+                    GPS lat
                     <SortIcon columnKey="latitude" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('longitude')}
-                  className="w-px whitespace-nowrap px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="w-px whitespace-nowrap px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                   title="GPS Longitude"
                 >
                   <div className="flex items-center gap-2">
-                    GPS LONG
+                    GPS long
                     <SortIcon columnKey="longitude" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('sessionName')}
-                  className="w-64 px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="w-64 px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                 >
                   <div className="flex items-center gap-2">
-                    Session Name
+                    Session name
                     <SortIcon columnKey="sessionName" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('school')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                 >
                   <div className="flex items-center gap-2">
                     School
@@ -1282,7 +1298,7 @@ const RawDataView = ({
                 </th>
                 <th
                   onClick={() => handleSort('instructor')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors whitespace-nowrap"
+                  className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors whitespace-nowrap"
                 >
                   <div className="flex items-center gap-2">
                     Class (teacher · period)
@@ -1291,19 +1307,19 @@ const RawDataView = ({
                 </th>
                 <th
                   onClick={() => handleSort('group')}
-                  className="px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                  className="px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline cursor-pointer hover:bg-hairline-soft transition-colors"
                 >
                   <div className="flex items-center gap-2">
                     Group
                     <SortIcon columnKey="group" />
                   </div>
                 </th>
-                <th className="whitespace-nowrap px-4 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                <th className="whitespace-nowrap px-4 py-3 text-left text-cap font-semibold text-secondary bg-canvas border-b border-hairline">
                   Visibility
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody>
               {paginatedData.map((row, idx) => {
                 const isExpanded = expandedRows[row.id];
                 const detailedData = isExpanded ? generateDetailedData(row) : [];
@@ -1317,22 +1333,22 @@ const RawDataView = ({
                           toggleRowExpansion(row.id);
                         }
                       }}
-                      className={`cursor-pointer hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
+                      className={`cursor-pointer hover:bg-canvas transition-colors border-b border-hairline-soft ${idx % 2 === 0 ? 'bg-surface' : 'bg-canvas/40'}`}
                     >
                       <td className="px-4 py-3">
                         <button
                           onClick={() => toggleRowExpansion(row.id)}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                          className="p-1 hover:bg-hairline-soft rounded-ctrl transition-colors"
                           title={isExpanded ? "Collapse" : "Expand to see detailed data"}
                         >
-                          <ChevronRight className={`w-4 h-4 text-gray-600 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                          <ChevronRight className={`w-4 h-4 text-secondary transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                         </button>
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap font-mono text-xs">
+                      <td className="mono px-4 py-3 text-secondary whitespace-nowrap text-xs">
                         {formatTimestamp(row.capturedAt)}
                       </td>
                   {/* PM 2.5 */}
-                  <td className={`px-4 py-3 text-sm font-semibold ${appliedMetrics.pm25 ? '' : 'hidden'} ${selectedMetric === 'pm25' ? 'bg-blue-50' : ''}`}>
+                  <td className={`px-4 py-3 text-small font-semibold ${appliedMetrics.pm25 ? '' : 'hidden'} ${selectedMetric === 'pm25' ? 'bg-canvas' : ''}`}>
                     {editingCell.rowId === row.id && editingCell.field === 'pm25' ? (
                       <input
                         type="number"
@@ -1344,7 +1360,7 @@ const RawDataView = ({
                           if (e.key === 'Enter') handleFieldEdit(row.id, 'pm25', e.target.value);
                           if (e.key === 'Escape') setEditingCell({ rowId: null, field: null });
                         }}
-                        className="w-20 px-2 py-1 text-sm border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-20 px-2 py-1 text-sm border border-link rounded focus:outline-none focus:ring-2 focus:ring-link"
                       />
                     ) : (
                       <button
@@ -1461,7 +1477,7 @@ const RawDataView = ({
                         autoFocus
                         onChange={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
                         onBlur={(e) => handleFieldEdit(row.id, 'indoorOutdoor', e.target.value)}
-                        className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                        className="px-2 py-1 text-sm border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-link bg-surface"
                       >
                         {INDOOR_OUTDOOR_OPTIONS.map((option) => (
                           <option key={option} value={option}>{option}</option>
@@ -1473,12 +1489,8 @@ const RawDataView = ({
                         className="flex items-center gap-2"
                         title="Click to edit INDOOR/OUTDOOR"
                       >
-                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                          row.indoorOutdoor === 'INDOOR'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-green-100 text-green-800'
-                        }`}>
-                          {row.indoorOutdoor}
+                        <span className="tag inline-block text-cap px-2.5 py-0.5 rounded-pill border border-hairline text-secondary">
+                          {row.indoorOutdoor === 'INDOOR' ? 'Indoor' : 'Outdoor'}
                         </span>
                         {isEdited(row.id, 'indoorOutdoor') && (
                           <span className="text-xs text-orange-600 font-semibold">*</span>
@@ -1494,13 +1506,13 @@ const RawDataView = ({
                         href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                        className="text-link hover:text-link hover:underline"
                         title="Open in Google Maps"
                       >
                         {Number(row.latitude).toFixed(4)}
                       </a>
                     ) : (
-                      <span className="text-gray-400">—</span>
+                      <span className="text-muted">—</span>
                     )}
                   </td>
 
@@ -1511,47 +1523,47 @@ const RawDataView = ({
                         href={`https://www.google.com/maps?q=${row.latitude},${row.longitude}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                        className="text-link hover:text-link hover:underline"
                         title="Open in Google Maps"
                       >
                         {Number(row.longitude).toFixed(4)}
                       </a>
                     ) : (
-                      <span className="text-gray-400">—</span>
+                      <span className="text-muted">—</span>
                     )}
                   </td>
 
                   {/* Session Name */}
                   <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.sessionName}</span>
+                    <span className="font-medium text-fg">{row.sessionName}</span>
                   </td>
 
                   {/* School */}
                   <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.school}</span>
+                    <span className="font-medium text-fg">{row.school}</span>
                   </td>
 
                   {/* Class (teacher · period) */}
                   <td className="px-4 py-3 text-sm whitespace-nowrap">
-                    <span className="font-medium text-gray-900">{row.instructor} · {row.period}</span>
+                    <span className="font-medium text-fg">{row.instructor} · {row.period}</span>
                   </td>
 
                   {/* Group */}
                   <td className="px-4 py-3 text-sm">
-                    <span className="font-medium text-gray-900">{row.group}</span>
+                    <span className="font-medium text-fg">{row.group}</span>
                   </td>
 
                   {/* Visibility — editable by the session OWNER only */}
                   <td className="px-4 py-3 text-sm whitespace-nowrap">
                     {(() => {
                       const meta = VISIBILITY_META[row.visibility];
-                      if (!meta) return <span className="text-gray-400">—</span>;
+                      if (!meta) return <span className="text-muted">—</span>;
                       const isOwner = !isReadOnly && row.ownerCode === viewerIdentity.studentCode;
                       if (!isOwner) {
                         return (
                           <span className="group inline-flex items-center gap-1" title="Only the session owner can change this">
                             <span className={`px-2 py-1 text-xs font-semibold rounded-full ${meta.cls}`}>{meta.label}</span>
-                            <Lock className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <Lock className="w-3 h-3 text-hairline opacity-0 group-hover:opacity-100 transition-opacity" />
                           </span>
                         );
                       }
@@ -1566,14 +1578,14 @@ const RawDataView = ({
                           </button>
                           {visibilityMenu === row.id && (
                             <div
-                              className="absolute right-0 z-30 mt-1 w-36 bg-white border border-gray-200 rounded-lg shadow-lg p-1"
+                              className="absolute right-0 z-30 mt-1 w-36 bg-surface border border-hairline-soft rounded-ctrl shadow-lg p-1"
                               onClick={(e) => e.stopPropagation()}
                             >
                               {VISIBILITY_OPTIONS.map((key) => (
                                 <button
                                   key={key}
                                   onClick={(e) => { e.stopPropagation(); handleVisibilityChange(row, key); }}
-                                  className={`flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs rounded-md hover:bg-gray-50 ${row.visibility === key ? 'font-semibold text-gray-900' : 'text-gray-600'}`}
+                                  className={`flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs rounded-md hover:bg-canvas ${row.visibility === key ? 'font-semibold text-fg' : 'text-secondary'}`}
                                 >
                                   <span className={`w-2 h-2 rounded-full ${VISIBILITY_META[key].dot}`} />
                                   {VISIBILITY_META[key].label}
@@ -1588,17 +1600,17 @@ const RawDataView = ({
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan="15" className="px-4 py-4 bg-gray-50 border-t-2 border-gray-300">
+                    <td colSpan="15" className="px-4 py-4 bg-canvas border-t-2 border-hairline">
                       <div className="space-y-4">
                         <div className="flex items-center justify-between mb-3">
-                          <h4 className="font-semibold text-gray-900">Detailed Second-by-Second Data</h4>
-                          <span className="text-xs text-gray-500">{detailedData.length} readings</span>
+                          <h4 className="font-semibold text-fg">Detailed Second-by-Second Data</h4>
+                          <span className="text-xs text-muted">{detailedData.length} readings</span>
                         </div>
                         {/* Fixed-height (~10 rows) scrollable panel so long sessions don't
                             stretch the expansion — Session Photos below stay visible. */}
-                        <div className="h-72 overflow-auto border border-gray-200 rounded-lg">
+                        <div className="h-72 overflow-auto border border-hairline-soft rounded-ctrl">
                           <table className="w-full text-xs">
-                            <thead className="bg-gray-100 sticky top-0">
+                            <thead className="bg-canvas sticky top-0">
                               <tr>
                                 <th className="px-2 py-2 text-left font-semibold">Time</th>
                                 <th className="px-2 py-2 text-left font-semibold">PM 2.5 (µg/m³)</th>
@@ -1607,9 +1619,9 @@ const RawDataView = ({
                                 <th className="px-2 py-2 text-left font-semibold">Humidity (%)</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-200">
+                            <tbody className="divide-y divide-hairline-soft">
                               {detailedData.map((detail) => (
-                                <tr key={detail.id} className="hover:bg-gray-50">
+                                <tr key={detail.id} className="hover:bg-canvas">
                                   <td className="px-2 py-1 font-mono">{detail.time}</td>
                                   <td className="px-2 py-1">{detail.pm25}</td>
                                   <td className="px-2 py-1">{detail.co}</td>
@@ -1621,12 +1633,12 @@ const RawDataView = ({
                           </table>
                         </div>
                         {/* Photo Gallery */}
-                        <div className="mt-4 pt-4 border-t border-gray-200">
+                        <div className="mt-4 pt-4 border-t border-hairline-soft">
                           <div className="flex items-center gap-2 mb-2">
-                            <ImageIcon className="w-4 h-4 text-gray-500" />
-                            <h5 className="font-semibold text-gray-700 text-sm">Session Photos</h5>
+                            <ImageIcon className="w-4 h-4 text-muted" />
+                            <h5 className="font-semibold text-secondary text-sm">Session Photos</h5>
                             {row.photos && row.photos.length > 0 && (
-                              <span className="text-xs text-gray-500">({row.photos.length})</span>
+                              <span className="text-xs text-muted">({row.photos.length})</span>
                             )}
                           </div>
                           <div className="flex gap-2 flex-wrap">
@@ -1642,7 +1654,7 @@ const RawDataView = ({
                                   <button
                                     key={photoIdx}
                                     onClick={() => setSelectedPhoto({ ...photo, rowDate: row.date, rowTime: row.time, location: row.location })}
-                                    className="relative w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200 hover:border-blue-500 transition-colors group"
+                                    className="relative w-20 h-20 rounded-ctrl overflow-hidden border-2 border-hairline-soft hover:border-link transition-colors group"
                                   >
                                     <img
                                       src={photo.url}
@@ -1663,7 +1675,7 @@ const RawDataView = ({
                                 );
                               })
                             ) : (
-                              <div className="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
+                              <div className="w-20 h-20 bg-canvas rounded-ctrl flex items-center justify-center text-muted text-xs">
                                 No photos
                               </div>
                             )}
@@ -1671,8 +1683,8 @@ const RawDataView = ({
                         </div>
 
                         {/* Observation note (per-session), below Session Photos */}
-                        <div className="mt-4 pt-4 border-t border-gray-200">
-                          <h5 className="font-semibold text-gray-700 text-sm mb-2">Observation note</h5>
+                        <div className="mt-4 pt-4 border-t border-hairline-soft">
+                          <h5 className="font-semibold text-secondary text-sm mb-2">Observation note</h5>
                           {editingNotes === row.id ? (
                             <textarea
                               defaultValue={row.sessionNotes}
@@ -1680,24 +1692,24 @@ const RawDataView = ({
                               rows="2"
                               onBlur={(e) => handleSessionNotesEdit(row.id, e.target.value)}
                               placeholder="Add an observation note about this session..."
-                              className="w-full px-2 py-1 text-sm border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                              className="w-full px-2 py-1 text-sm border border-link rounded focus:outline-none focus:ring-2 focus:ring-link resize-none"
                             />
                           ) : (
                             <button
                               onClick={() => setEditingNotes(row.id)}
-                              className="text-left w-full text-sm text-gray-600 hover:text-blue-600 transition-colors group"
+                              className="text-left w-full text-sm text-secondary hover:text-link transition-colors group"
                               title="Click to add or edit the observation note"
                             >
                               {row.sessionNotes ? (
                                 <span className="inline-flex items-center gap-2">
                                   <span>{row.sessionNotes}</span>
-                                  <Pencil className="h-3 w-3 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
+                                  <Pencil className="h-3 w-3 text-muted opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                                   {isEdited(row.id, 'sessionNotes') && (
                                     <span className="text-xs text-orange-600 font-semibold">*</span>
                                   )}
                                 </span>
                               ) : (
-                                <span className="text-gray-400 italic">Add an observation note…</span>
+                                <span className="text-muted italic">Add an observation note…</span>
                               )}
                             </button>
                           )}
@@ -1714,26 +1726,28 @@ const RawDataView = ({
         </div>
 
         {/* Pagination */}
-        <div className="bg-gray-50 px-6 py-4 border-t border-gray-200">
+        <div className="bg-canvas px-6 py-4 border-t border-hairline-soft">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-700">
+            <p className="text-small text-secondary">
               Page <span className="font-semibold">{currentPage}</span> of <span className="font-semibold">{totalPages}</span>
             </p>
             <div className="flex gap-2">
-              <button
+              <Button
+                size="sm"
+                variant="neutral"
                 onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                 disabled={currentPage === 1}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 Previous
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
+                variant="neutral"
                 onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                 disabled={currentPage === totalPages}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 Next
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -1742,17 +1756,17 @@ const RawDataView = ({
       {/* Photo Modal */}
       {selectedPhoto && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4" onClick={() => setSelectedPhoto(null)}>
-          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="bg-surface rounded-card max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-canvas px-6 py-4 border-b border-hairline-soft flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-gray-900">Session Photo</h3>
-                <p className="text-sm text-gray-600">{selectedPhoto.location} - {selectedPhoto.rowDate} {selectedPhoto.rowTime}</p>
+                <h3 className="font-semibold text-fg">Session Photo</h3>
+                <p className="text-sm text-secondary">{selectedPhoto.location} - {selectedPhoto.rowDate} {selectedPhoto.rowTime}</p>
               </div>
               <button
                 onClick={() => setSelectedPhoto(null)}
-                className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                className="p-2 hover:bg-hairline-soft rounded-ctrl transition-colors"
               >
-                <X className="w-5 h-5 text-gray-600" />
+                <X className="w-5 h-5 text-secondary" />
               </button>
             </div>
             <div className="p-6 flex flex-col items-center">
@@ -1760,7 +1774,7 @@ const RawDataView = ({
                 <img
                   src={selectedPhoto.url}
                   alt="Enlarged capture"
-                  className="max-w-full max-h-[60vh] rounded-lg shadow-lg mb-4"
+                  className="max-w-full max-h-[60vh] rounded-ctrl shadow-lg mb-4"
                   onError={(e) => {
                     e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Crect fill="%23ddd" width="400" height="300"/%3E%3Ctext fill="%23999" x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3EImage not available%3C/text%3E%3C/svg%3E';
                   }}
@@ -1775,11 +1789,11 @@ const RawDataView = ({
                   </div>
                 )}
               </div>
-              <div className="w-full bg-gray-50 rounded-lg p-4 mb-4">
+              <div className="w-full bg-canvas rounded-ctrl p-4 mb-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">Photo Information</p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm font-semibold text-secondary mb-1">Photo Information</p>
+                    <p className="text-sm text-secondary">
                       {selectedPhoto.timestamp 
                         ? new Date(selectedPhoto.timestamp).toLocaleString('en-US', {
                             dateStyle: 'medium',
@@ -1800,7 +1814,7 @@ const RawDataView = ({
                       link.target = '_blank';
                       link.click();
                     }}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-85 text-white rounded-ctrl transition-colors"
                   >
                     <Download className="w-4 h-4" />
                     Download
@@ -1812,59 +1826,48 @@ const RawDataView = ({
         </div>
       )}
 
-      {/* Help Modal */}
+      {/* Help Modal — plain typography, no icon badges or bullet glyphs; sections are
+          told apart with hairlines and a small-caps label instead. */}
       {showHelpModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setShowHelpModal(false)}>
-          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-blue-600 text-white p-6 rounded-t-2xl flex items-center justify-between">
-              <h3 className="text-xl font-bold">How to Use Raw Data</h3>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowHelpModal(false)}>
+          <div className="bg-surface rounded-card max-w-md w-full border border-hairline-soft shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 pt-6 pb-1 flex items-center justify-between">
+              <h3 className="text-tile text-fg">How to use Raw Data</h3>
               <button
                 onClick={() => setShowHelpModal(false)}
-                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+                aria-label="Close"
+                className="p-1 -mr-1 text-muted hover:text-fg transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
-                  <BarChart3 className="h-4 w-4" aria-hidden="true" />
-                  Viewing Data
-                </h4>
-                <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                  <li>• Click the <strong>chevron (▶)</strong> to expand rows and see detailed second-by-second sensor data</li>
-                  <li>• Click <strong>location coordinates</strong> to open Google Maps</li>
-                </ul>
+            <div className="px-6 pb-2 divide-y divide-hairline-soft">
+              <div className="py-4">
+                <p className="text-cap font-semibold uppercase tracking-wide text-muted mb-2">Viewing data</p>
+                <div className="text-small text-secondary space-y-1.5">
+                  <p>Click the <strong className="text-fg font-medium">chevron</strong> to expand a row and see second-by-second sensor data.</p>
+                  <p>Click <strong className="text-fg font-medium">location coordinates</strong> to open the spot in Google Maps.</p>
+                </div>
               </div>
-              <div>
-                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                  Editing Data
-                </h4>
-                <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                  <li>• <strong>Click any data value</strong> to edit it - edited values show a <span className="font-bold text-orange-600">*</span> badge</li>
-                  <li>• <strong>Click notes</strong> to add context about measurement conditions</li>
-                </ul>
+              <div className="py-4">
+                <p className="text-cap font-semibold uppercase tracking-wide text-muted mb-2">Editing data</p>
+                <div className="text-small text-secondary space-y-1.5">
+                  <p>Click any <strong className="text-fg font-medium">data value</strong> to edit it — edited values are marked with an asterisk.</p>
+                  <p>Click <strong className="text-fg font-medium">notes</strong> to add context about measurement conditions.</p>
+                </div>
               </div>
-              <div>
-                <h4 className="mb-2 flex items-center gap-2 font-semibold text-gray-900">
-                  <Camera className="h-4 w-4" aria-hidden="true" />
-                  Photos
-                </h4>
-                <ul className="text-sm text-gray-700 space-y-1 ml-4">
-                  <li>• <strong>Click photos</strong> in expanded rows to view full-size images</li>
-                  <li>• Photos show timestamps automatically</li>
-                  <li>• Use the <strong>Download button</strong> to save photos with timestamp filenames</li>
-                </ul>
+              <div className="py-4">
+                <p className="text-cap font-semibold uppercase tracking-wide text-muted mb-2">Photos</p>
+                <div className="text-small text-secondary space-y-1.5">
+                  <p>Click a <strong className="text-fg font-medium">photo</strong> in an expanded row to view it full-size, complete with its timestamp.</p>
+                  <p>Use <strong className="text-fg font-medium">Download</strong> to save photos with timestamp filenames.</p>
+                </div>
               </div>
             </div>
-            <div className="p-6 border-t border-gray-200">
-              <button
-                onClick={() => setShowHelpModal(false)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-              >
-                Got it!
-              </button>
+            <div className="px-6 pb-6 pt-3 flex justify-end">
+              <Button onClick={() => setShowHelpModal(false)}>
+                Got it
+              </Button>
             </div>
           </div>
         </div>

@@ -2,9 +2,91 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens (mirrors tailwind.config.js theme.extend.colors/borderRadius).
+ * These exist as CSS custom properties for the handful of places that need raw
+ * CSS (gradients, SVG-heavy components) rather than Tailwind utility classes.
+ */
+:root {
+  --primary: #0071e3;
+  --brand: #000000;
+  --canvas: #f5f5f7;
+  --surface: #ffffff;
+  --fg: #1d1d1f;
+  --on-primary: #ffffff;
+  --muted: #6e6e73;
+  --secondary: #515154;
+  --link: #0066cc;
+  --link-dark: #2997ff;
+  --hairline: #d2d2d7;
+  --hairline-soft: #e8e8ed;
+  --r-ctrl: 8px;
+  --r-card: 18px;
+  --r-pill: 980px;
+  /* AQI bands — mirrors tailwind.config.js theme.extend.colors.aqi.* */
+  --good: #2e9e5b;
+  --mod: #c8930f;
+  --usg: #d96a20;
+  --unh: #c62f27;
+  --vunh: #8e4b9e;
+  --haz: #7a2233;
+}
+
 /* Reduce layout shift / horizontal jitter (maps + wide dashboards on GitHub Pages / mobile) */
 html {
   overflow-x: hidden;
+}
+
+/*
+ * Landing page wordmark: types out once on load, then does a brief color "scan" as if
+ * it just took a reading, before settling into the real brand gradient.
+ */
+.wordmark-cursor {
+  display: inline-block;
+  width: 0.05em;
+  height: 0.82em;
+  margin-left: 0.06em;
+  transform: translateY(0.08em);
+  background: var(--primary);
+  animation: wordmark-blink 0.9s steps(1) infinite;
+}
+
+@keyframes wordmark-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.wordmark-detecting {
+  animation: wordmark-detect 0.9s ease-in-out 1;
+}
+
+@keyframes wordmark-detect {
+  0% {
+    filter: hue-rotate(0deg) saturate(1);
+  }
+  22% {
+    filter: hue-rotate(-45deg) saturate(1.6);
+  }
+  48% {
+    filter: hue-rotate(35deg) saturate(1.5);
+  }
+  74% {
+    filter: hue-rotate(-12deg) saturate(1.2);
+  }
+  100% {
+    filter: hue-rotate(0deg) saturate(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wordmark-cursor {
+    animation: none;
+    display: none;
+  }
+  .wordmark-detecting {
+    animation: none;
+  }
 }
 
 /* Gentle fade used when the WakeGate splash cycles through air facts */
